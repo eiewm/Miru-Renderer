@@ -1,0 +1,41 @@
+/target/
+/tests/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Local editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local render inputs and outputs
+*.osr
+*.osu
+*.osz
+*.osk
+*.mp4
+*.mov
+*.mkv
+*.webm
+*.avi
+*.partial
+
+# Project-local caches and generated reports
+/miru_songs_cache/
+/MapsetCache/
+/renders/
+/previews/
+report.json
+*.report.json
+
+# Logs and temporary files
+*.log
+*.tmp

@@ -1,0 +1,219 @@
+{
+    "version":  1,
+    "width":  80,
+    "height":  80,
+    "excludedAcronyms":  [
+                             "TD",
+                             "RX",
+                             "SO",
+                             "AP",
+                             "CM",
+                             "TP",
+                             "RD"
+                         ],
+    "entries":  [
+                    {
+                        "acronym":  "NM",
+                        "label":  "No Mod",
+                        "accent":  "#8CB7FF",
+                        "assetFile":  "NM.png",
+                        "src":  "/mod-icons/NM.png"
+                    },
+                    {
+                        "acronym":  "NF",
+                        "label":  "No Fail",
+                        "accent":  "#F2B16C",
+                        "assetFile":  "NF.png",
+                        "src":  "/mod-icons/NF.png"
+                    },
+                    {
+                        "acronym":  "EZ",
+                        "label":  "Easy",
+                        "accent":  "#8ED68B",
+                        "assetFile":  "EZ.png",
+                        "src":  "/mod-icons/EZ.png"
+                    },
+                    {
+                        "acronym":  "HD",
+                        "label":  "Hidden",
+                        "accent":  "#F1DA69",
+                        "assetFile":  "HD.png",
+                        "src":  "/mod-icons/HD.png"
+                    },
+                    {
+                        "acronym":  "HR",
+                        "label":  "Hard Rock",
+                        "accent":  "#F28A8D",
+                        "assetFile":  "HR.png",
+                        "src":  "/mod-icons/HR.png"
+                    },
+                    {
+                        "acronym":  "SD",
+                        "label":  "Sudden Death",
+                        "accent":  "#E7A2A2",
+                        "assetFile":  "SD.png",
+                        "src":  "/mod-icons/SD.png"
+                    },
+                    {
+                        "acronym":  "DT",
+                        "label":  "Double Time",
+                        "accent":  "#C4A4FF",
+                        "assetFile":  "DT.png",
+                        "src":  "/mod-icons/DT.png"
+                    },
+                    {
+                        "acronym":  "HT",
+                        "label":  "Half Time",
+                        "accent":  "#87CFF7",
+                        "assetFile":  "HT.png",
+                        "src":  "/mod-icons/HT.png"
+                    },
+                    {
+                        "acronym":  "NC",
+                        "label":  "Nightcore",
+                        "accent":  "#FF9ED8",
+                        "assetFile":  "NC.png",
+                        "src":  "/mod-icons/NC.png"
+                    },
+                    {
+                        "acronym":  "FL",
+                        "label":  "Flashlight",
+                        "accent":  "#CAB9FF",
+                        "assetFile":  "FL.png",
+                        "src":  "/mod-icons/FL.png"
+                    },
+                    {
+                        "acronym":  "PF",
+                        "label":  "Perfect",
+                        "accent":  "#F4B0B0",
+                        "assetFile":  "PF.png",
+                        "src":  "/mod-icons/PF.png"
+                    },
+                    {
+                        "acronym":  "FI",
+                        "label":  "Fade In",
+                        "accent":  "#A7C8FF",
+                        "assetFile":  "FI.png",
+                        "src":  "/mod-icons/FI.png"
+                    },
+                    {
+                        "acronym":  "MR",
+                        "label":  "Mirror",
+                        "accent":  "#B8AEFF",
+                        "assetFile":  "MR.png",
+                        "src":  "/mod-icons/MR.png"
+                    },
+                    {
+                        "acronym":  "V2",
+                        "label":  "ScoreV2 Legacy",
+                        "accent":  "#99B9FF",
+                        "assetFile":  "V2.png",
+                        "src":  "/mod-icons/V2.png"
+                    },
+                    {
+                        "acronym":  "AT",
+                        "label":  "Autoplay",
+                        "accent":  "#A5E4BF",
+                        "assetFile":  "AT.png",
+                        "src":  "/mod-icons/AT.png"
+                    },
+                    {
+                        "acronym":  "AC",
+                        "label":  "Accuracy Challenge",
+                        "accent":  "#83D9FF",
+                        "assetFile":  "AC.png",
+                        "src":  "/mod-icons/AC.png"
+                    },
+                    {
+                        "acronym":  "AS",
+                        "label":  "Adaptive Speed",
+                        "accent":  "#7FE8D6",
+                        "assetFile":  "AS.png",
+                        "src":  "/mod-icons/AS.png"
+                    },
+                    {
+                        "acronym":  "CL",
+                        "label":  "Classic",
+                        "accent":  "#F2CF8C",
+                        "assetFile":  "CL.png",
+                        "src":  "/mod-icons/CL.png"
+                    },
+                    {
+                        "acronym":  "CO",
+                        "label":  "Cover",
+                        "accent":  "#93D5FF",
+                        "assetFile":  "CO.png",
+                        "src":  "/mod-icons/CO.png"
+                    },
+                    {
+                        "acronym":  "CS",
+                        "label":  "Constant Speed",
+                        "accent":  "#9FDBFF",
+                        "assetFile":  "CS.png",
+                        "src":  "/mod-icons/CS.png"
+                    },
+                    {
+                        "acronym":  "DC",
+                        "label":  "Daycore",
+                        "accent":  "#90BFFF",
+                        "assetFile":  "DC.png",
+                        "src":  "/mod-icons/DC.png"
+                    },
+                    {
+                        "acronym":  "HO",
+                        "label":  "Hold Off",
+                        "accent":  "#EFB49E",
+                        "assetFile":  "HO.png",
+                        "src":  "/mod-icons/HO.png"
+                    },
+                    {
+                        "acronym":  "IN",
+                        "label":  "Invert",
+                        "accent":  "#F1A3E6",
+                        "assetFile":  "IN.png",
+                        "src":  "/mod-icons/IN.png"
+                    },
+                    {
+                        "acronym":  "LZ",
+                        "label":  "Lazer",
+                        "accent":  "#88DFC2",
+                        "assetFile":  "LZ.png",
+                        "src":  "/mod-icons/LZ.png"
+                    },
+                    {
+                        "acronym":  "MU",
+                        "label":  "Muted",
+                        "accent":  "#C4C7DA",
+                        "assetFile":  "MU.png",
+                        "src":  "/mod-icons/MU.png"
+                    },
+                    {
+                        "acronym":  "NR",
+                        "label":  "No Release",
+                        "accent":  "#E4B4B4",
+                        "assetFile":  "NR.png",
+                        "src":  "/mod-icons/NR.png"
+                    },
+                    {
+                        "acronym":  "SV2",
+                        "label":  "ScoreV2",
+                        "accent":  "#B7BCFF",
+                        "assetFile":  "SV2.png",
+                        "src":  "/mod-icons/SV2.png"
+                    },
+                    {
+                        "acronym":  "WU",
+                        "label":  "Wind Up",
+                        "accent":  "#E9C78F",
+                        "assetFile":  "WU.png",
+                        "src":  "/mod-icons/WU.png"
+                    },
+                    {
+                        "acronym":  "WD",
+                        "label":  "Wind Down",
+                        "accent":  "#EAB6CF",
+                        "assetFile":  "WD.png",
+                        "src":  "/mod-icons/WD.png"
+                    }
+                ]
+}
