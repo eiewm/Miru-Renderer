@@ -86,18 +86,31 @@ pub fn resolve_audio(set_dir: &Path, audio_filename: Option<&str>) -> Option<Pat
         .collect();
     if let Some(filename) = audio_filename {
         let wanted = filename.trim().to_lowercase();
-        if let Some(path) = lc_map.get(&wanted) {
-            if path.exists() {
-                return Some(path.clone());
+        let mut candidates = vec![wanted.clone()];
+        if let Some(sanitized) = crate::utils::sanitize_archive_entry_name(filename.trim()) {
+            if let Some(name) = Path::new(&sanitized)
+                .file_name()
+                .and_then(|name| name.to_str())
+            {
+                candidates.push(name.to_lowercase());
             }
         }
-        if let Some(base) = Path::new(&wanted).file_stem().and_then(|s| s.to_str()) {
-            // Some maps keep the stem but ship a different common audio extension.
-            for ext in &audio_extensions {
-                let candidate = format!("{base}{ext}");
-                if let Some(path) = lc_map.get(&candidate) {
-                    if path.exists() {
-                        return Some(path.clone());
+        candidates.dedup();
+
+        for candidate in candidates {
+            if let Some(path) = lc_map.get(&candidate) {
+                if path.exists() {
+                    return Some(path.clone());
+                }
+            }
+            if let Some(base) = Path::new(&candidate).file_stem().and_then(|s| s.to_str()) {
+                // Some maps keep the stem but ship a different common audio extension.
+                for ext in &audio_extensions {
+                    let candidate = format!("{base}{ext}");
+                    if let Some(path) = lc_map.get(&candidate) {
+                        if path.exists() {
+                            return Some(path.clone());
+                        }
                     }
                 }
             }

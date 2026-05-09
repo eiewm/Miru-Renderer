@@ -1,4 +1,5 @@
 use crate::utils::safe_archive_entry_path;
+use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::{BufReader, Read, Seek, Write};
 use std::path::Path;
@@ -51,12 +52,13 @@ fn extract_archive<R: Read + Seek>(
         let mut file_count = 0usize;
         let mut osu_file_count = 0usize;
         let mut total_bytes = 0u64;
+        let mut seen_file_paths = HashSet::new();
         for i in 0..archive.len() {
             let mut entry = archive
                 .by_index(i)
                 .map_err(|e| format!("zip entry error: {e}"))?;
             let name = entry.name().to_string();
-            // Validate the path before any write so archive entries stay inside dest_dir.
+            // Normalize the path before any write so archive entries stay inside dest_dir and work on Windows.
             let Some(out_path) = safe_archive_entry_path(dest_dir, &name) else {
                 return Err(format!("unsafe zip entry path rejected: {name}"));
             };
@@ -81,6 +83,12 @@ fn extract_archive<R: Read + Seek>(
             if entry.is_dir() {
                 fs::create_dir_all(&out_path).map_err(|e| e.to_string())?;
                 continue;
+            }
+            let relative_file_key = relative_path_str.replace('\\', "/").to_ascii_lowercase();
+            if !seen_file_paths.insert(relative_file_key) {
+                return Err(format!(
+                    "zip entry path collision after sanitizing unsafe filename: {name}"
+                ));
             }
             file_count += 1;
             if file_count > limits.max_files {
