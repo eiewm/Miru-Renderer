@@ -314,6 +314,12 @@ impl ManiaVideoConverter {
         if !self.settings.combo_images_enabled {
             skin.config.combo_burst.clear();
         }
+        if let Some(direction) = self.settings.scroll_direction {
+            // Every layout path reads resolved_upside_down(), so overriding the
+            // skin value here is enough to flip notes, receptors, LN bodies,
+            // stage pieces and the HUD without touching each of them.
+            skin.config.upside_down = Some(direction.is_upscroll());
+        }
         println!("   skin: {} images loaded", skin.image_count());
         self.progress(15, "Resolving audio...");
         let audio_local_only = autoplay || opts.audio_local_only;
@@ -389,9 +395,7 @@ impl ManiaVideoConverter {
                 self.print_all_presses(&dr.press_status, &beatmap);
             }
         }
-        let resolved_hud_config = self.settings.hud_config.as_ref().map(|cfg| {
-            resolve_hud_config(cfg, self.settings.width as f32, self.settings.height as f32)
-        });
+        let resolved_hud_config = self.resolve_hud_config_for_canvas();
         let layout = self.build_layout(key_count, &skin, resolved_hud_config.as_ref());
         let cover_metrics = crate::renderer::resolve_playfield_cover_metrics(
             cover_config.mode,
@@ -555,26 +559,13 @@ impl ManiaVideoConverter {
             hit50: windows.hit50,
             miss: windows.hit50 + 100,
         };
-        // Stable scroll speed is calibrated against osu!'s legacy 768px playfield space.
-        const STABLE_MAX_TIME_RANGE_MS: f64 = 11_485.0;
-        const LEGACY_HIT_POSITION_SPACE: f64 = 768.0;
-        const LEGACY_DEFAULT_HIT_POSITION: f64 = 402.0;
-        let ss = (self.settings.scroll_speed as f64).max(1.0);
-        let travel_dist = (layout.stage.hit_y - layout.stage.top_y).max(1) as f64;
-        let scale_y = (layout.scale_y as f64).max(1e-6);
-        let hit_position = layout.stage.hit_y as f64 / scale_y;
-        let default_length = (LEGACY_HIT_POSITION_SPACE - LEGACY_DEFAULT_HIT_POSITION).max(1.0);
-        let hit_length = (LEGACY_HIT_POSITION_SPACE - hit_position).max(1.0);
-        let hit_position_scale = (hit_length / default_length).clamp(0.25, 4.0);
-        let time_range_ms = (STABLE_MAX_TIME_RANGE_MS / ss) * hit_position_scale;
+        let travel_dist = layout.scroll_travel_px() as f64;
+        let time_range_ms = scroll_time_range_ms(self.settings.scroll_speed, layout.hit_position);
         let pps_base = (travel_dist * 1000.0 / time_range_ms.max(1e-3)) as f32;
         let visual_pps = pps_base;
         eprintln!(
-            "   [scroll] ss={} pps_base={:.2} visual_pps={:.2} travel_dist={}",
-            self.settings.scroll_speed,
-            pps_base,
-            visual_pps,
-            layout.stage.hit_y - layout.stage.top_y
+            "   [scroll] ss={} time_range={:.1}ms pps_base={:.2} visual_pps={:.2} travel_dist={}",
+            self.settings.scroll_speed, time_range_ms, pps_base, visual_pps, travel_dist
         );
         let last_object_time = beatmap
             .hit_objects
@@ -1480,3 +1471,23 @@ impl ManiaVideoConverter {
         replay.replay.perfect_combo = miss_count == 0;
     }
 }
+
+/// How long a note stays on screen, which is what the scroll speed really sets.
+///
+/// Calibrated against osu!'s legacy 768px playfield space: a hit line further
+/// from the far edge means a shorter trip, so the same speed has to show the
+/// note for less time.
+pub(crate) fn scroll_time_range_ms(scroll_speed: f32, hit_position: f32) -> f64 {
+    const STABLE_MAX_TIME_RANGE_MS: f64 = 11_485.0;
+    const LEGACY_HIT_POSITION_SPACE: f64 = 768.0;
+    const LEGACY_DEFAULT_HIT_POSITION: f64 = 402.0;
+
+    let ss = (scroll_speed as f64).max(1.0);
+    let default_length = LEGACY_HIT_POSITION_SPACE - LEGACY_DEFAULT_HIT_POSITION;
+    let hit_length = (LEGACY_HIT_POSITION_SPACE - hit_position as f64).max(1.0);
+    let hit_position_scale = (hit_length / default_length).clamp(0.25, 4.0);
+    (STABLE_MAX_TIME_RANGE_MS / ss) * hit_position_scale
+}
+
+#[cfg(test)]
+mod tests;

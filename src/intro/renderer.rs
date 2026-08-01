@@ -1,7 +1,8 @@
 use crate::intro::{
     apply_rounded_mask, create_avatar, create_blurred_background, create_key_badge,
     create_mod_badges, create_mod_badges_from_specs, fade_opacity,
-    fit_intro_mod_badge_specs_to_width, pulse_scale, render_text, FontWeight, IntroConfig,
+    fit_intro_mod_badge_specs_to_width, pulse_scale, render_text, render_text_fitted,
+    FontWeight, IntroConfig,
     IntroFrame, Logo,
 };
 use crate::renderer::gpu::{
@@ -343,22 +344,26 @@ fn render_ui_overlay(cfg: &IntroConfig, logo: &Logo) -> Vec<u8> {
         cfg.map_title.as_deref().unwrap_or("Unknown"),
         cfg.map_artist.as_deref().unwrap_or("")
     );
-    if let Some(title) = render_text(
+    // Font sizes come from the height, so a long title overflows a 9:16 canvas.
+    let text_max_width = (w as f32 * 0.92).round() as u32;
+    if let Some(title) = render_text_fitted(
         &title_artist,
         title_font,
         [255, 255, 255, 255],
         FontWeight::Bold,
+        text_max_width,
     ) {
         let diff_line = format!(
             "[{}] mapped by {}",
             cfg.map_difficulty.as_deref().unwrap_or(""),
             cfg.map_creator.as_deref().unwrap_or("")
         );
-        let diff = render_text(
+        let diff = render_text_fitted(
             &diff_line,
             small_font,
             [200, 200, 200, 230],
             FontWeight::Normal,
+            text_max_width,
         );
         let diff_block_h = diff
             .as_ref()

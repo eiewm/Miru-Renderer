@@ -1,4 +1,25 @@
 use super::assets::{map_column_family, ManiaFamily};
+// Scrolling direction is a local option in osu!stable, so it is never stored in
+// the replay and cannot be inferred from it. Renders take it as an explicit
+// choice; when unset the skin's own UpsideDown value is kept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScrollDirection {
+    #[default]
+    Down,
+    Up,
+}
+impl ScrollDirection {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "down" | "downscroll" => Some(Self::Down),
+            "up" | "upscroll" => Some(Self::Up),
+            _ => None,
+        }
+    }
+    pub fn is_upscroll(self) -> bool {
+        matches!(self, Self::Up)
+    }
+}
 #[derive(Debug, Clone)]
 pub struct SkinConfig {
     pub column_width: Vec<f32>,

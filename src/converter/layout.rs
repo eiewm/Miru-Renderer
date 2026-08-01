@@ -1,4 +1,12 @@
 use super::*;
+
+/// The stage never takes the whole width: notes need breathing room at the edges
+/// and the receptors would touch the frame otherwise.
+const MAX_STAGE_WIDTH_FRACTION: f32 = 0.92;
+/// Ceiling for the vertical scale, relative to the one the height alone would
+/// give. Without it a 1K stage grows until a single note fills half the screen.
+const MAX_VERTICAL_SCALE_RATIO: f32 = 1.6;
+
 impl ManiaVideoConverter {
     pub(crate) fn build_layout(
         &self,
@@ -6,13 +14,14 @@ impl ManiaVideoConverter {
         skin: &SkinAssets,
         hud_config: Option<&HudConfig>,
     ) -> ManiaLayoutInfo {
+        let canvas_w = self.settings.width;
         let canvas_h = self.settings.height;
+        let is_vertical = canvas_w < canvas_h;
         let key_count = key_count as usize;
         let base_height = 480.0f32;
         let base_width = 640.0f32;
         // osu!mania skin coordinates are authored in a 640x480 space; scale from height.
-        let scale_y = canvas_h as f32 / base_height;
-        let scale_from_height = scale_y;
+        let scale_from_height = canvas_h as f32 / base_height;
         let mut width_list: Vec<f32> = skin
             .config
             .column_widths
@@ -40,12 +49,41 @@ impl ManiaVideoConverter {
         } else {
             (base_width - logical_width) / 2.0
         };
+        // In 9:16 the height is no longer what bounds the stage: a 7K playfield
+        // scaled from a 1920px height would be twice as wide as the canvas. The
+        // scale comes from a width budget instead, so a wide keycount fits and a
+        // narrow one grows into the space it would otherwise waste. It stays a
+        // single scale for both axes: stretching only the width would deform the
+        // notes.
+        let scale_from_width =
+            (canvas_w as f32 * MAX_STAGE_WIDTH_FRACTION) / logical_width.max(1.0);
+        let scale = if is_vertical {
+            scale_from_width.min(scale_from_height * MAX_VERTICAL_SCALE_RATIO)
+        } else {
+            // Height rules in landscape, unless a squarer canvas makes it overflow.
+            scale_from_height.min(scale_from_width)
+        };
+        // The skin's origin assumes a 640x480 space, so narrower canvases centre instead.
+        let skin_start_px = start_logical * scale;
+        let stage_width_px = logical_width * scale;
+        let overflows =
+            skin_start_px < 0.0 || skin_start_px + stage_width_px > canvas_w as f32;
+        let centered = is_vertical || overflows;
+        let vertical_start_px = if centered {
+            (canvas_w as f32 - stage_width_px) / 2.0
+        } else {
+            skin_start_px
+        };
         let mut columns: Vec<ColumnLayout> = Vec::with_capacity(key_count);
         let mut cursor = start_logical;
         for i in 0..key_count {
             let w = width_list[i];
-            let x_px = (cursor * scale_from_height).round() as i32;
-            let width_px = (w * scale_from_height).round() as u32;
+            let x_px = if centered {
+                (vertical_start_px + (cursor - start_logical) * scale).round() as i32
+            } else {
+                (cursor * scale).round() as i32
+            };
+            let width_px = (w * scale).round() as u32;
             columns.push(ColumnLayout {
                 x: x_px,
                 width: width_px,
@@ -55,9 +93,14 @@ impl ManiaVideoConverter {
                 cursor += spacing_list[i];
             }
         }
-        let mut stage_width = (logical_width * scale_from_height).round() as u32;
-        let stage_height = (base_height * scale_from_height).round() as u32;
-        let mut stage_x = (start_logical * scale_from_height).round() as i32;
+        let mut stage_width = (logical_width * scale).round() as u32;
+        // Nominal skin box height; in portrait the real one is derived from the hit line.
+        let stage_height = (base_height * scale).round() as u32;
+        let mut stage_x = if centered {
+            vertical_start_px.round() as i32
+        } else {
+            (start_logical * scale).round() as i32
+        };
         let mut stage_top_override: Option<i32> = None;
         // HUD column overrides apply after skin geometry so editor layouts can move the playfield.
         if let Some(columns_cfg) = hud_config.and_then(|cfg| cfg.elements.columns.as_ref()) {
@@ -203,23 +246,75 @@ impl ManiaVideoConverter {
         } else {
             hit_position
         };
-        let default_hit_y = (logical_hit_position * scale_from_height).round() as i32;
-        let default_top_y = (default_hit_y - stage_height as i32).max(0);
-        let top_y = stage_top_override.unwrap_or(default_top_y);
-        let hit_y = if stage_top_override.is_some() {
-            // Moving the stage top also moves the hit line so receptor distance stays unchanged.
-            default_hit_y + (top_y - default_top_y)
+        // In portrait `scale` comes from the width, so keep the skin's fraction, not its pixels.
+        let (default_hit_y, default_top_y, default_bottom_y) = if is_vertical {
+            let band = (((base_height - hit_position) / base_height) * canvas_h as f32)
+                .round()
+                .max(1.0) as i32;
+            // Notes start below the HUD band so the score cannot overlap them.
+            let track_top = crate::hud::vertical_hud_band(canvas_w, canvas_h).unwrap_or(0) as i32;
+            // Receptors anchor to the canvas edge, or they float mid-screen.
+            if skin.config.resolved_upside_down() {
+                // Upscroll puts the receptors on the HUD side, so they start below it.
+                let hit = (track_top + band).min(canvas_h as i32 - 1);
+                (hit, track_top, canvas_h as i32)
+            } else {
+                let hit = (canvas_h as i32 - band).max(track_top + 1);
+                (hit, track_top, canvas_h as i32)
+            }
         } else {
-            default_hit_y
+            let hit = (logical_hit_position * scale).round() as i32;
+            let top = (hit - stage_height as i32).max(0);
+            (hit, top, top + stage_height as i32)
         };
-        let bottom_y = top_y + stage_height as i32;
+        // Landscape measures this against the skin box so 16:9 output never shifts.
+        let key_area_px = if is_vertical {
+            ((base_height - hit_position) * scale).round() as i32
+        } else if skin.config.resolved_upside_down() {
+            default_hit_y - default_top_y
+        } else {
+            default_bottom_y - default_hit_y
+        };
+        let top_y = stage_top_override.unwrap_or(default_top_y);
+        // Moving the stage top also moves the hit line so receptor distance stays unchanged.
+        let shift = top_y - default_top_y;
+        let hit_y = default_hit_y + shift;
+        // Pixels per unit of the skin's 480-tall space along the axis the hit line
+        // was placed on: the canvas in 9:16, where `scale` comes from the width.
+        let logical_scale = if is_vertical {
+            (canvas_h as f32 / base_height).max(1e-6)
+        } else {
+            scale.max(1e-6)
+        };
+        let shift_logical = shift as f32 / logical_scale;
+        let effective_hit_position = if skin.config.resolved_upside_down() {
+            hit_position - shift_logical
+        } else {
+            hit_position + shift_logical
+        };
+        let bottom_y = default_bottom_y + shift;
+        let stage_height = (bottom_y - top_y).max(1) as u32;
+        // Paint to the canvas edge, not the skin box, or the stage floats over the art.
+        let (view_top_y, view_bottom_y) = if is_vertical && stage_top_override.is_none() {
+            (0, canvas_h as i32)
+        } else {
+            (top_y, bottom_y)
+        };
         println!(
             "   [layout] columnStart={:?}, columnWidths={:?}, hitPos={}",
             skin.config.column_start, skin.config.column_widths, hit_position
         );
         println!(
-            "   [layout] stageX={}, stageW={}, topY={}, hitY={}, scale={:.3}",
-            stage_x, stage_width, top_y, hit_y, scale_from_height
+            "   [layout] stageX={}, stageW={}, topY={}, hitY={}, bottomY={}, viewY={}..{}, upsideDown={}, scale={:.3}",
+            stage_x,
+            stage_width,
+            top_y,
+            hit_y,
+            bottom_y,
+            view_top_y,
+            view_bottom_y,
+            skin.config.resolved_upside_down(),
+            scale
         );
         ManiaLayoutInfo {
             stage: StageLayout {
@@ -230,10 +325,19 @@ impl ManiaVideoConverter {
                 hit_y,
                 top_y,
                 bottom_y,
+                view_top_y,
+                view_bottom_y,
             },
             columns,
-            scale_y: scale_from_height,
+            scale_y: scale,
+            hit_position: effective_hit_position,
+            key_area_px,
             upside_down: skin.config.resolved_upside_down(),
+            hud_anchor_y: if is_vertical {
+                crate::hud::vertical_hud_band(canvas_w, canvas_h).unwrap_or(0) as i32
+            } else {
+                0
+            },
         }
     }
     pub(crate) fn compute_barlines(
@@ -300,3 +404,6 @@ pub(crate) struct KeyMaskEvent {
     pub(crate) time: i32,
     pub(crate) mask: u32,
 }
+
+#[cfg(test)]
+mod tests;

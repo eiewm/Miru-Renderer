@@ -1,14 +1,18 @@
 mod accuracy;
+mod assets;
 mod combo;
 mod config;
 mod judge_anim;
 mod metrics;
 mod score;
 mod text_sprite;
+mod vertical;
 pub use accuracy::*;
+pub use assets::*;
 pub use combo::*;
 pub use config::*;
 pub use judge_anim::*;
 pub use metrics::*;
 pub use score::*;
 pub use text_sprite::*;
+pub use vertical::*;

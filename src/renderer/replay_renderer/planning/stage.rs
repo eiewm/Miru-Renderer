@@ -116,9 +116,9 @@ impl ReplayRenderer {
             let mut sprite = SpriteCommand {
                 texture_id: "solid_white".into(),
                 x: col.x,
-                y: layout.stage.y,
+                y: layout.stage.view_top_y,
                 width: col.width,
-                height: layout.stage.height,
+                height: layout.view_height(),
                 tint,
                 z_order: z_order::COLUMN_BG,
                 ..Default::default()
@@ -138,8 +138,8 @@ impl ReplayRenderer {
         transform_timestamp_ms: i32,
     ) {
         let judgment_y = layout.stage.hit_y;
-        let top_y = layout.stage.top_y;
-        let bottom_y = layout.stage.bottom_y;
+        let top_y = layout.stage.view_top_y;
+        let bottom_y = layout.stage.view_bottom_y;
         for &bt in barlines {
             // Barlines use the grid SV lane, which can differ from object SV under inherited timing.
             if bt < timestamp - 400 || bt > timestamp + 8000 {
@@ -195,9 +195,9 @@ impl ReplayRenderer {
             let mut sprite = SpriteCommand {
                 texture_id: "solid_white".into(),
                 x: separator_x,
-                y: layout.stage.top_y,
+                y: layout.stage.view_top_y,
                 width,
-                height: layout.stage.height,
+                height: layout.view_height(),
                 tint,
                 z_order: z_order::COLUMN_LINE,
                 ..Default::default()
@@ -377,11 +377,12 @@ impl ReplayRenderer {
         self.rotate_columns_sprite(&mut sprite, layout, timestamp_ms);
         planner.add_sprite(sprite);
     }
+    /// Receptors anchor to the hit line, not to the stage edge.
     fn key_sprite_top_for_stage_edge(&self, layout: &ManiaLayoutInfo, key_h: u32) -> i32 {
         if layout.upside_down {
-            layout.stage.top_y
+            layout.stage.hit_y - layout.key_area_px
         } else {
-            layout.stage.bottom_y - key_h as i32
+            layout.stage.hit_y + layout.key_area_px - key_h as i32
         }
     }
     pub fn get_column_padding(
@@ -444,8 +445,8 @@ impl ReplayRenderer {
         animation_time_ms: f64,
     ) {
         let judgment_y = layout.stage.hit_y;
-        let top_y = layout.stage.top_y;
-        let bottom_y = layout.stage.bottom_y;
+        let top_y = layout.stage.view_top_y;
+        let bottom_y = layout.stage.view_bottom_y;
         let note_lighting_base = skin
             .config
             .lighting_n
@@ -587,15 +588,15 @@ impl ReplayRenderer {
         if original_h <= 0.0 || original_w <= 0.0 {
             return;
         }
-        let scaled_h = (original_h * layout.scale_y).round() as u32;
+        let scaled_h = (original_h * layout.furniture_scale()).round() as u32;
         let aspect_ratio = original_w / original_h;
         let scaled_w = (scaled_h as f32 * aspect_ratio).round() as u32;
         let stage_center_x = layout.stage.x + layout.stage.width as i32 / 2;
         let mut image_left = (stage_center_x - scaled_w as i32 / 2) as f32;
         let mut image_top = if layout.upside_down {
-            layout.stage.top_y
+            layout.stage.view_top_y
         } else {
-            layout.stage.bottom_y - scaled_h as i32
+            layout.stage.view_bottom_y - scaled_h as i32
         } as f32;
         let mut image_width = scaled_w as f32;
         let mut image_height = scaled_h as f32;
@@ -746,16 +747,16 @@ impl ReplayRenderer {
             let Some(meta) = self.texture_meta.get(texture_name) else {
                 continue;
             };
-            let scale = layout.stage.height as f32 / meta.h.max(1) as f32;
+            let scale = layout.view_height() as f32 / meta.h.max(1) as f32;
             let mut width = (meta.w as f32 * scale).round().max(1.0);
-            let mut height = layout.stage.height as f32;
+            let mut height = layout.view_height() as f32;
             let aspect_ratio = meta.w.max(1) as f32 / meta.h.max(1) as f32;
             let mut x = if align_left {
                 layout.stage.x as f32 - width
             } else {
                 (layout.stage.x + layout.stage.width as i32) as f32
             };
-            let mut y = layout.stage.top_y as f32;
+            let mut y = layout.stage.view_top_y as f32;
             if let Some(cfg) = config {
                 if let Some(next_width) = cfg.width.filter(|v| v.is_finite() && *v > 0.0) {
                     width = next_width;
@@ -1195,7 +1196,11 @@ fn legacy_texture_display_height(
 ) -> u32 {
     // Legacy skin dimensions are logical pixels; @2x textures draw at half their bitmap height.
     let scale_adjust = if texture_id.contains("@2x") { 2.0 } else { 1.0 };
-    let screen_scale = layout.stage.height.max(1) as f32 / 768.0;
+    // Comes from the playfield scale, not from the stage box. In 16:9 the box is
+    // 480 logical units tall so both are the same number, but in 9:16 the box
+    // spans the whole canvas while the columns keep their own scale, and reading
+    // the height from the box there stretched every receptor into an ellipse.
+    let screen_scale = layout.scale_y * (480.0 / 768.0);
     ((texture_height.max(1) as f32) / scale_adjust * screen_scale)
         .round()
         .max(1.0) as u32
@@ -1251,6 +1256,7 @@ fn mania_logical_y_to_screen(layout: &ManiaLayoutInfo, skin: &SkinAssets, logica
     } else {
         logical_y
     };
+    // Column scale, which is what anything living inside a column uses.
     layout.stage.hit_y as f32 + (effective_y - effective_hit_position) * layout.scale_y
 }
 fn lighting_one_shot_duration_ms(frame_count: usize) -> i32 {

@@ -2,7 +2,14 @@ use ab_glyph::{point, Font, FontArc, GlyphId, PxScale, ScaleFont};
 use image::{Rgba, RgbaImage};
 use std::sync::OnceLock;
 const FONT_UBUNTU_REGULAR: &[u8] = include_bytes!("../../assets/Ubuntu-Regular.ttf");
+// Ubuntu covers latin, cyrillic and greek but has no CJK glyphs, and ab_glyph
+// does no fallback of its own: it just draws .notdef, which is the empty box
+// players were seeing on japanese titles.
+const FONT_NOTO_SANS_JP: &[u8] = include_bytes!("../../assets/NotoSansJP-Regular.ttf");
+const FONT_NOTO_SANS_KR: &[u8] = include_bytes!("../../assets/NotoSansKR-Regular.ttf");
 static LOADED_UBUNTU_REGULAR: OnceLock<Option<FontArc>> = OnceLock::new();
+static LOADED_NOTO_SANS_JP: OnceLock<Option<FontArc>> = OnceLock::new();
+static LOADED_NOTO_SANS_KR: OnceLock<Option<FontArc>> = OnceLock::new();
 pub fn font_regular() -> Option<&'static FontArc> {
     font_ubuntu_regular()
 }
@@ -13,6 +20,59 @@ pub fn font_ubuntu_regular() -> Option<&'static FontArc> {
     LOADED_UBUNTU_REGULAR
         .get_or_init(|| FontArc::try_from_slice(FONT_UBUNTU_REGULAR).ok())
         .as_ref()
+}
+fn font_noto_sans_jp() -> Option<&'static FontArc> {
+    LOADED_NOTO_SANS_JP
+        .get_or_init(|| FontArc::try_from_slice(FONT_NOTO_SANS_JP).ok())
+        .as_ref()
+}
+fn font_noto_sans_kr() -> Option<&'static FontArc> {
+    LOADED_NOTO_SANS_KR
+        .get_or_init(|| FontArc::try_from_slice(FONT_NOTO_SANS_KR).ok())
+        .as_ref()
+}
+/// Embedded CJK fallbacks, in the order they should be consulted. Callers that
+/// build their own font stacks (the custom HUD) append these last so configured
+/// fonts still win.
+pub fn embedded_cjk_fallbacks() -> impl Iterator<Item = &'static FontArc> {
+    [font_noto_sans_jp(), font_noto_sans_kr()]
+        .into_iter()
+        .flatten()
+}
+/// Font that actually has a glyph for `ch`, preferring the caller's own font.
+///
+/// The choice is per character, not per string: a title like
+/// `Yorushika - 藍二乗` mixes scripts on the same line.
+pub fn font_for_char(primary: &FontArc, ch: char) -> &FontArc {
+    if primary.glyph_id(ch).0 != 0 {
+        return primary;
+    }
+    [font_noto_sans_jp(), font_noto_sans_kr()]
+        .into_iter()
+        .flatten()
+        .find(|font| font.glyph_id(ch).0 != 0)
+        .unwrap_or(primary)
+}
+/// Width of `text` with every character measured on the font that will draw it.
+/// Measuring everything against the primary font reports latin advances for
+/// glyphs that a fallback ends up rendering much wider.
+pub fn measure_text_with_fallback(font: &FontArc, scale: PxScale, text: &str) -> f32 {
+    text.chars()
+        .filter(|ch| *ch != '\n')
+        .map(|ch| {
+            let scaled = font_for_char(font, ch).as_scaled(scale);
+            scaled.h_advance(scaled.glyph_id(ch))
+        })
+        .sum()
+}
+/// Baseline offset that keeps every font used by `text` inside the image.
+/// Noto sits higher above the baseline than Ubuntu, so using the primary
+/// ascent alone clipped the top of CJK glyphs.
+fn fallback_ascent(font: &FontArc, scale: PxScale, text: &str) -> f32 {
+    text.chars()
+        .filter(|ch| *ch != '\n')
+        .map(|ch| font_for_char(font, ch).as_scaled(scale).ascent())
+        .fold(font.as_scaled(scale).ascent(), f32::max)
 }
 pub fn font_badge_value() -> Option<&'static FontArc> {
     font_ubuntu_regular()
@@ -72,11 +132,13 @@ pub(crate) fn draw_text_rgba(
     font: &FontArc,
     text: &str,
 ) {
-    let scaled = font.as_scaled(scale);
-    let line_height = (scaled.height() + scaled.line_gap()).max(scale.y);
-    let mut caret = point(x as f32, y as f32 + scaled.ascent());
+    let primary = font.as_scaled(scale);
+    let line_height = (primary.height() + primary.line_gap()).max(scale.y);
+    // All runs share one baseline; only its distance from the top has to account
+    // for the tallest font involved.
+    let mut caret = point(x as f32, y as f32 + fallback_ascent(font, scale, text));
     let start_x = caret.x;
-    let mut previous = None::<GlyphId>;
+    let mut previous = None::<(GlyphId, *const FontArc)>;
     for ch in text.chars() {
         if ch == '\n' {
             caret.x = start_x;
@@ -84,9 +146,14 @@ pub(crate) fn draw_text_rgba(
             previous = None;
             continue;
         }
+        let font = font_for_char(font, ch);
+        let scaled = font.as_scaled(scale);
         let glyph_id = scaled.glyph_id(ch);
-        if let Some(previous_id) = previous {
-            caret.x += scaled.kern(previous_id, glyph_id);
+        // Kerning pairs only exist within a font, so a run boundary drops them.
+        if let Some((previous_id, previous_font)) = previous {
+            if std::ptr::eq(previous_font, font as *const FontArc) {
+                caret.x += scaled.kern(previous_id, glyph_id);
+            }
         }
         let glyph = glyph_id.with_scale_and_position(scale, caret);
         if let Some(outlined) = font.outline_glyph(glyph) {
@@ -104,7 +171,7 @@ pub(crate) fn draw_text_rgba(
             });
         }
         caret.x += scaled.h_advance(glyph_id);
-        previous = Some(glyph_id);
+        previous = Some((glyph_id, font as *const FontArc));
     }
 }
 pub fn render_text(
@@ -118,12 +185,7 @@ pub fn render_text(
         FontWeight::Normal => font_regular()?,
     };
     let scale = PxScale::from(font_size);
-    let scaled = font.as_scaled(scale);
-    let mut text_width = 0.0f32;
-    for ch in text.chars() {
-        let glyph_id = scaled.glyph_id(ch);
-        text_width += scaled.h_advance(glyph_id);
-    }
+    let text_width = measure_text_with_fallback(font, scale, text);
     let shadow_pad = 4u32;
     let img_w = (text_width.ceil() as u32) + shadow_pad * 2;
     let img_h = (font_size * 1.5).ceil() as u32;
@@ -150,6 +212,32 @@ pub fn render_text(
         image: img,
     })
 }
+/// Like `render_text`, but shrinks the size until the text fits `max_width`.
+pub fn render_text_fitted(
+    text: &str,
+    font_size: f32,
+    color: [u8; 4],
+    weight: FontWeight,
+    max_width: u32,
+) -> Option<RenderedText> {
+    const MIN_FONT_SIZE: f32 = 10.0;
+    let font = match weight {
+        FontWeight::Bold => font_bold()?,
+        FontWeight::Normal => font_regular()?,
+    };
+    let mut size = font_size;
+    while size > MIN_FONT_SIZE {
+        let width = measure_text_with_fallback(font, PxScale::from(size), text);
+        if width.ceil() as u32 + 8 <= max_width {
+            break;
+        }
+        // A proportional step converges in a couple of passes.
+        let next = size * (max_width as f32 / (width.max(1.0) + 8.0)) * 0.98;
+        size = next.max(MIN_FONT_SIZE).min(size - 0.5);
+    }
+    render_text(text, size, color, weight)
+}
+
 pub fn render_text_with_font(
     text: &str,
     font_size: f32,
@@ -157,12 +245,7 @@ pub fn render_text_with_font(
     font: &FontArc,
 ) -> Option<RenderedText> {
     let scale = PxScale::from(font_size);
-    let scaled = font.as_scaled(scale);
-    let mut text_width = 0.0f32;
-    for ch in text.chars() {
-        let glyph_id = scaled.glyph_id(ch);
-        text_width += scaled.h_advance(glyph_id);
-    }
+    let text_width = measure_text_with_fallback(font, scale, text);
     let shadow_pad = 4u32;
     let img_w = (text_width.ceil() as u32) + shadow_pad * 2;
     let img_h = (font_size * 1.5).ceil() as u32;
@@ -207,12 +290,7 @@ pub fn render_text_simple_with_font(
     font: &FontArc,
 ) -> Option<RenderedText> {
     let scale = PxScale::from(font_size);
-    let scaled = font.as_scaled(scale);
-    let mut text_width = 0.0f32;
-    for ch in text.chars() {
-        let glyph_id = scaled.glyph_id(ch);
-        text_width += scaled.h_advance(glyph_id);
-    }
+    let text_width = measure_text_with_fallback(font, scale, text);
     let img_w = (text_width.ceil() as u32).max(1);
     let img_h = (font_size * 1.3).ceil() as u32;
     let mut img = RgbaImage::new(img_w, img_h);
@@ -232,20 +310,10 @@ pub fn measure_text(text: &str, font_size: f32, weight: FontWeight) -> f32 {
         // Font loading can fail in stripped builds; keep layout deterministic with an approximate width.
         return text.len() as f32 * font_size * 0.55;
     };
-    let scaled = font.as_scaled(PxScale::from(font_size));
-    let mut width = 0.0f32;
-    for ch in text.chars() {
-        width += scaled.h_advance(scaled.glyph_id(ch));
-    }
-    width
+    measure_text_with_fallback(font, PxScale::from(font_size), text)
 }
 pub fn measure_text_with_font(text: &str, font_size: f32, font: &FontArc) -> f32 {
-    let scaled = font.as_scaled(PxScale::from(font_size));
-    let mut width = 0.0f32;
-    for ch in text.chars() {
-        width += scaled.h_advance(scaled.glyph_id(ch));
-    }
-    width
+    measure_text_with_fallback(font, PxScale::from(font_size), text)
 }
 pub fn escape_xml(text: &str) -> String {
     let mut out = String::with_capacity(text.len());

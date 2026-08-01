@@ -4,6 +4,7 @@ use crate::intro::{
     get_bpm_at_time, GpuIntroRenderer, IntroConfig, IntroModBadgeSpec, INTRO_DURATION_MS,
 };
 use crate::modes::mania::assets::{map_column_family, ManiaFamily};
+use crate::modes::mania::layout::ScrollDirection;
 use crate::modes::mania::judgment::{self, HitWindows, Judgment};
 use crate::modes::mania::timing;
 use crate::parser;
@@ -166,6 +167,17 @@ impl ManiaVideoConverter {
     }
     pub fn set_hud_config(&mut self, cfg: Option<HudConfig>) {
         self.settings.hud_config = cfg;
+    }
+    /// The user HUD in canvas pixels, over the portrait layout when portrait.
+    pub(crate) fn resolve_hud_config_for_canvas(&self) -> Option<HudConfig> {
+        let width = self.settings.width;
+        let height = self.settings.height;
+        let resolved = self
+            .settings
+            .hud_config
+            .as_ref()
+            .map(|cfg| resolve_hud_config(cfg, width as f32, height as f32));
+        crate::hud::with_vertical_defaults(resolved, width, height)
     }
     pub fn set_storyboard_enabled(&mut self, v: bool) {
         self.settings.storyboard_enabled = v;

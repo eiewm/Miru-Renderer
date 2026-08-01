@@ -38,12 +38,15 @@ pub(super) const LEGACY_SONG_PROGRESS_GAP_X: f32 = 18.0;
 pub(super) const LEGACY_SCORE_MARGIN_X: f32 = 10.0;
 pub(super) const LEGACY_ACCURACY_MARGIN_X: f32 = 17.0;
 pub(super) const LEGACY_ACCURACY_MARGIN_Y: f32 = 9.0;
+/// Widest the accuracy block may get in 9:16; the rest is for the progress circle.
+const VERTICAL_ACCURACY_MAX_WIDTH_FRACTION: f32 = 0.82;
 pub(super) const REPLAY_MOD_DEFAULT_ICON_SIZE: f32 = 48.0;
 pub(super) const REPLAY_MOD_COLLAPSED_STEP_X: f32 = 23.0;
 pub(super) const REPLAY_MOD_DEFAULT_MARGIN_RIGHT: f32 = 10.0;
 pub(super) const REPLAY_MOD_DEFAULT_MARGIN_TOP: f32 = 10.0;
 pub(super) const LEGACY_COMBO_LAYOUT_SCALE: f32 = 1.28;
 const SCREEN_RIGHT_HUD_REFERENCE_HEIGHT: f32 = 768.0;
+const SCREEN_RIGHT_HUD_REFERENCE_WIDTH: f32 = 1024.0;
 const STAGE_RELATIVE_HUD_REFERENCE_HEIGHT: f32 = 768.0;
 const STAGE_RELATIVE_ACCURACY_LEFT_GAP_480: f32 = 91.925;
 const STAGE_RELATIVE_ACCURACY_TOP_480: f32 = 28.74;
@@ -81,8 +84,22 @@ pub(super) fn legacy_scaled_hud_px(unscaled_px: f32, scale: f32) -> f32 {
 pub(super) fn legacy_component_right_edge(canvas_w: u32, margin_x: f32, scale_x: f32) -> f32 {
     canvas_w as f32 - legacy_scaled_hud_px(margin_x, scale_x)
 }
-pub(super) fn screen_right_hud_scale(canvas_h: u32) -> f32 {
-    (canvas_h.max(1) as f32 / SCREEN_RIGHT_HUD_REFERENCE_HEIGHT).max(f32::EPSILON)
+/// Scale for the HUD pinned to the right of the screen: score, accuracy, the song
+/// progress circle and the replay mod icons.
+///
+/// Authored against a 1024x768 screen and scaled by height, which holds while the
+/// canvas is at least that wide in proportion. In 9:16 it does not: a 1920-tall
+/// canvas gives 2.5 and the progress circle comes out the size of a coaster. The
+/// width budget bounds it, and on any horizontal canvas the height still wins, so
+/// 16:9 keeps the exact numbers it had.
+pub(super) fn screen_right_hud_scale(canvas_w: u32, canvas_h: u32) -> f32 {
+    let from_height = canvas_h.max(1) as f32 / SCREEN_RIGHT_HUD_REFERENCE_HEIGHT;
+    let from_width = canvas_w.max(1) as f32 / SCREEN_RIGHT_HUD_REFERENCE_WIDTH;
+    if canvas_w < canvas_h {
+        (from_height * from_width).sqrt().max(f32::EPSILON)
+    } else {
+        from_height.min(from_width).max(f32::EPSILON)
+    }
 }
 fn legacy_song_progress_default_left(
     canvas_w: u32,
@@ -301,7 +318,7 @@ fn resolve_legacy_text_component_transform(
     }
 }
 fn legacy_song_progress_layout_size(_canvas_w: u32, canvas_h: u32) -> u32 {
-    (LEGACY_SONG_PROGRESS_LAYOUT_BASE_SIZE * screen_right_hud_scale(canvas_h))
+    (LEGACY_SONG_PROGRESS_LAYOUT_BASE_SIZE * screen_right_hud_scale(_canvas_w, canvas_h))
         .round()
         .max(1.0) as u32
 }
@@ -539,15 +556,15 @@ impl ReplayRenderer {
             })
         {
             if let Some(meta) = self.texture_meta.get(stage_left) {
-                let scale = layout.stage.height as f32 / meta.h.max(1) as f32;
+                let scale = layout.view_height() as f32 / meta.h.max(1) as f32;
                 let width = (meta.w as f32 * scale).round().max(1.0) as u32;
                 components.push((
                     "stageLeft",
                     HudEditorPreviewRect {
                         x: layout.stage.x - width as i32,
-                        y: layout.stage.top_y,
+                        y: layout.stage.view_top_y,
                         width,
-                        height: layout.stage.height,
+                        height: layout.view_height(),
                     },
                 ));
             }
@@ -558,15 +575,15 @@ impl ReplayRenderer {
             })
         {
             if let Some(meta) = self.texture_meta.get(stage_right) {
-                let scale = layout.stage.height as f32 / meta.h.max(1) as f32;
+                let scale = layout.view_height() as f32 / meta.h.max(1) as f32;
                 let width = (meta.w as f32 * scale).round().max(1.0) as u32;
                 components.push((
                     "stageRight",
                     HudEditorPreviewRect {
                         x: layout.stage.x + layout.stage.width as i32,
-                        y: layout.stage.top_y,
+                        y: layout.stage.view_top_y,
                         width,
-                        height: layout.stage.height,
+                        height: layout.view_height(),
                     },
                 ));
             }
@@ -579,7 +596,7 @@ impl ReplayRenderer {
             if let Some(meta) = self.texture_meta.get(stage_bottom) {
                 let original_w = meta.w as f32;
                 let original_h = meta.h.max(1) as f32;
-                let scaled_h = (original_h * layout.scale_y).round().max(1.0) as u32;
+                let scaled_h = (original_h * layout.furniture_scale()).round().max(1.0) as u32;
                 let scaled_w = (scaled_h as f32 * (original_w / original_h))
                     .round()
                     .max(1.0) as u32;
@@ -589,9 +606,9 @@ impl ReplayRenderer {
                     HudEditorPreviewRect {
                         x: stage_center_x - scaled_w as i32 / 2,
                         y: if layout.upside_down {
-                            layout.stage.top_y
+                            layout.stage.view_top_y
                         } else {
-                            layout.stage.bottom_y - scaled_h as i32
+                            layout.stage.view_bottom_y - scaled_h as i32
                         },
                         width: scaled_w,
                         height: scaled_h,
@@ -637,7 +654,7 @@ impl ReplayRenderer {
         let scale_y = layout.scale_y;
         let hud_elements = self.hud_config.as_ref().map(|cfg| &cfg.elements);
         let legacy_hud_layout = skin.legacy_hud_layout.as_ref();
-        let default_screen_right_hud_scale = screen_right_hud_scale(canvas_h);
+        let default_screen_right_hud_scale = screen_right_hud_scale(canvas_w, canvas_h);
         let raw_score_layout = self.measure_score_raw_layout(skin, hud_state.score as u64);
         let mut score_scale_x = LEGACY_SCORE_LAYOUT_BASE_SCALE * default_screen_right_hud_scale;
         let mut score_scale_y = LEGACY_SCORE_LAYOUT_BASE_SCALE * default_screen_right_hud_scale;
@@ -961,7 +978,7 @@ impl ReplayRenderer {
         let center_x = layout.stage.x + layout.stage.width as i32 / 2;
         let mut combo_center_x = center_x;
         let combo_y = if let Some(combo_pos) = skin.config.combo_pos_y {
-            (combo_pos as f32 * scale_y).round() as i32
+            layout.hud_anchor_y + (combo_pos as f32 * scale_y).round() as i32
         } else {
             (layout.stage.hit_y as f32 - 96.0 * scale_y).round() as i32
         };
@@ -1024,6 +1041,7 @@ impl ReplayRenderer {
                 last.age_ms,
                 judgment_center_x,
                 layout.stage.hit_y,
+                layout.hud_anchor_y,
                 scale_y,
                 anim_fps,
                 judgment_center_y,
@@ -1975,7 +1993,7 @@ impl ReplayRenderer {
             );
             let hud_elements = self.hud_config.as_ref().map(|cfg| &cfg.elements);
             let raw_score_layout = self.measure_score_raw_layout(skin, hud_state.score as u64);
-            let default_screen_right_hud_scale = screen_right_hud_scale(canvas_h);
+            let default_screen_right_hud_scale = screen_right_hud_scale(canvas_w, canvas_h);
             let mut score_scale_x = LEGACY_SCORE_LAYOUT_BASE_SCALE * default_screen_right_hud_scale;
             let mut score_scale_y = LEGACY_SCORE_LAYOUT_BASE_SCALE * default_screen_right_hud_scale;
             let mut score_right =
@@ -2142,6 +2160,23 @@ impl ReplayRenderer {
                     self.hud_element_runtime_rotation(score_cfg, state_time_ms),
                 );
             }
+            // `raw_accuracy_layout` is a legacy layout box, not ink width, so clamp the real text.
+            if canvas_w < canvas_h {
+                let probe = self.measure_accuracy_layout(
+                    skin,
+                    hud_state.accuracy,
+                    accuracy_scale_x,
+                    accuracy_scale_y,
+                    accuracy_right,
+                    accuracy_top,
+                );
+                let widest = canvas_w as f32 * VERTICAL_ACCURACY_MAX_WIDTH_FRACTION;
+                if probe.width as f32 > widest {
+                    let correction = widest / (probe.width as f32).max(1.0);
+                    accuracy_scale_x *= correction;
+                    accuracy_scale_y *= correction;
+                }
+            }
             let measured_accuracy_layout = self.measure_accuracy_layout(
                 skin,
                 hud_state.accuracy,
@@ -2172,6 +2207,16 @@ impl ReplayRenderer {
                 measured_accuracy_layout
             };
             let circle_left = match accuracy_default_layout_mode {
+                // Hang the circle off the measured text; the raw box would push it off-screen.
+                // cuadro, a media pantalla de sus propios digitos.
+                LegacyAccuracyDefaultLayoutMode::ScreenRight if canvas_w < canvas_h => {
+                    measured_accuracy_layout.left as f32
+                        - legacy_scaled_hud_px(
+                            LEGACY_SONG_PROGRESS_GAP_X,
+                            default_screen_right_hud_scale,
+                        )
+                        - default_progress_size
+                }
                 LegacyAccuracyDefaultLayoutMode::ScreenRight => legacy_song_progress_default_left(
                     canvas_w,
                     accuracy_screen_layout.width,
@@ -2195,7 +2240,10 @@ impl ReplayRenderer {
             let mut progress_x_f = circle_left;
             let mut progress_y_f = circle_top;
             let mut progress_size_f = default_progress_size;
-            if progress_cfg.is_none() && legacy_hud_layout.is_some() {
+            // The skin's legacy circle position assumes 4:3 and does not translate to 9:16.
+            let honour_legacy_progress_layout = canvas_w >= canvas_h;
+            if progress_cfg.is_none() && legacy_hud_layout.is_some() && honour_legacy_progress_layout
+            {
                 let (progress_x, progress_y, progress_size) = resolve_legacy_song_progress_layout(
                     canvas_w,
                     canvas_h,
@@ -2279,7 +2327,7 @@ impl ReplayRenderer {
             let center_x = layout.stage.x + layout.stage.width as i32 / 2;
             let mut combo_center_x = center_x;
             let combo_y = if let Some(combo_pos) = skin.config.combo_pos_y {
-                (combo_pos as f32 * scale_y).round() as i32
+                layout.hud_anchor_y + (combo_pos as f32 * scale_y).round() as i32
             } else {
                 (layout.stage.hit_y as f32 - 96.0 * scale_y).round() as i32
             };
@@ -2346,6 +2394,7 @@ impl ReplayRenderer {
                         last.age_ms,
                         judgment_center_x,
                         layout.stage.hit_y,
+                        layout.hud_anchor_y,
                         scale_y,
                         anim_fps,
                         judgment_center_y,
@@ -2430,3 +2479,5 @@ impl ReplayRenderer {
             .expect("frame should be available after render submit")
     }
 }
+#[cfg(test)]
+mod tests;

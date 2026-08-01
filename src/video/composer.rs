@@ -195,6 +195,23 @@ fn build_background_cover_filter(w: u32, h: u32) -> String {
         "scale=w='if(gte(iw*{h},ih*{w}),-2,{w})':h='if(gte(iw*{h},ih*{w}),{h},-2)',crop={w}:{h}:(iw-{w})/2:(ih-{h})/2"
     )
 }
+
+/// Portrait blurs the full background to fill the canvas and centres the
+/// uncropped image on top. `None` on landscape, where the usual crop is right.
+fn build_background_fill_steps(w: u32, h: u32, bg_idx: usize) -> Option<(Vec<String>, String)> {
+    if w >= h {
+        return None;
+    }
+    let sigma = (w as f32 / 36.0).max(8.0);
+    let cover = build_background_cover_filter(w, h);
+    let steps = vec![
+        format!("[{bg_idx}:v]split=2[bgfillsrc][bgfitsrc]"),
+        format!("[bgfillsrc]{cover},gblur=sigma={sigma:.1}[bgfill]"),
+        format!("[bgfitsrc]scale=w={w}:h={h}:force_original_aspect_ratio=decrease[bgfit]"),
+        "[bgfill][bgfit]overlay=x=(W-w)/2:y=(H-h)/2[bgcomposed]".to_string(),
+    ];
+    Some((steps, "bgcomposed".to_string()))
+}
 fn probe_ffmpeg_encoders() -> EncoderSupport {
     let output = Command::new("ffmpeg")
         .args(["-hide_banner", "-encoders"])
@@ -475,8 +492,14 @@ fn build_video_filter_cpu(
     output_fmt: &str,
 ) -> Option<String> {
     if let (Some(bg), Some(bg_idx)) = (bg, bg_idx) {
+        let fill = build_background_fill_steps(w, h, bg_idx);
+        let (mut steps, bg_label) = match &fill {
+            Some((fill_steps, label)) => (fill_steps.clone(), label.clone()),
+            None => (Vec::new(), format!("{bg_idx}:v")),
+        };
         let mut bg_chain: Vec<String> = Vec::new();
-        if bg_needs_scale {
+        // Portrait padding already sized the background to the canvas.
+        if bg_needs_scale && fill.is_none() {
             bg_chain.push(build_background_cover_filter(w, h));
         }
         if let Some(time_filter) = bg_time_filter {
@@ -496,12 +519,13 @@ fn build_video_filter_cpu(
             let f = format!("{:.3}", visible);
             bg_chain.push(format!("colorchannelmixer=rr={f}:gg={f}:bb={f}:aa=1"));
         }
+        if bg_chain.is_empty() {
+            bg_chain.push("null".into());
+        }
         let fg_chain = "null";
-        let mut steps = vec![
-            format!("[{}:v]{}[bgprep]", bg_idx, bg_chain.join(",")),
-            format!("[0:v]{}[fgprep]", fg_chain),
-            "[bgprep][fgprep]overlay=shortest=1:format=gbrp[vtmp]".into(),
-        ];
+        steps.push(format!("[{}]{}[bgprep]", bg_label, bg_chain.join(",")));
+        steps.push(format!("[0:v]{}[fgprep]", fg_chain));
+        steps.push("[bgprep][fgprep]overlay=shortest=1:format=gbrp[vtmp]".into());
         let mut last = "vtmp".to_string();
         if let Some(blur) = motion_blur_filter {
             steps.push(format!("[{last}]{blur}[vblur]"));
@@ -531,11 +555,17 @@ fn build_video_filter_hw(
 ) -> VideoFilterPlan {
     let cfg = hw_backend_config(backend);
     let visible = (1.0 - bg.dim).clamp(0.0, 1.0);
+    let fill = build_background_fill_steps(w, h, bg_idx);
+    let (mut steps, bg_label) = match &fill {
+        Some((fill_steps, label)) => (fill_steps.clone(), label.clone()),
+        None => (Vec::new(), format!("{bg_idx}:v")),
+    };
     let mut bg_chain: Vec<String> = Vec::new();
     if let Some(time_filter) = bg_time_filter {
         bg_chain.push(time_filter.to_string());
     }
-    if bg_needs_scale {
+    // Portrait padding already sized the background to the canvas.
+    if bg_needs_scale && fill.is_none() {
         bg_chain.push(build_background_cover_filter(w, h));
     }
     if let Some(blur_filter) = bg_blur_filter {
@@ -564,11 +594,9 @@ fn build_video_filter_hw(
     } else {
         format!("[bgprep][fgprep]{}[vtmp]", cfg.overlay)
     };
-    let mut steps = vec![
-        format!("[{}:v]{}[bgprep]", bg_idx, bg_chain.join(",")),
-        format!("[0:v]{}[fgprep]", fg_chain.join(",")),
-        overlay_step,
-    ];
+    steps.push(format!("[{}]{}[bgprep]", bg_label, bg_chain.join(",")));
+    steps.push(format!("[0:v]{}[fgprep]", fg_chain.join(",")));
+    steps.push(overlay_step);
     let mut last = "vtmp".to_string();
     if let Some(blur) = motion_blur_filter {
         // tmix runs on CPU, so hardware-composed frames must be downloaded before motion blur.

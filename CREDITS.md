@@ -38,6 +38,15 @@ public release.
   bundled as `assets/Ubuntu-Regular.ttf` under the Ubuntu Font Licence 1.0.
   The local license text is in `assets/Ubuntu-Regular-LICENSE.txt`.
 
+- Noto Sans JP and Noto Sans KR, by Google and contributors:
+  bundled as `assets/NotoSansJP-Regular.ttf` and `assets/NotoSansKR-Regular.ttf`
+  under the SIL Open Font License 1.1. The local license text is in
+  `assets/NotoSans-LICENSE.txt`. Both are used as per-character fallbacks for
+  text Ubuntu cannot cover, which is every CJK script. They were derived from
+  the upstream variable fonts by pinning the weight axis to 400 and dropping the
+  OpenType layout tables the renderer does not use; no glyph was removed.
+  https://github.com/notofonts/noto-cjk
+
 - Lain Memories skin, by Yoush:
   bundled as `assets/skin/- Lain memories.osk`. The source forum topic is
   `Lain Memories v1.1`.

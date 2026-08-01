@@ -193,8 +193,8 @@ impl ReplayRenderer {
         label_h: u32,
     ) -> i32 {
         let raw_y = note_top_y + (note_h as i32 - label_h as i32) / 2;
-        let min_y = layout.stage.top_y;
-        let max_y = layout.stage.bottom_y - label_h as i32;
+        let min_y = layout.stage.view_top_y;
+        let max_y = layout.stage.view_bottom_y - label_h as i32;
         raw_y.clamp(min_y, max_y.max(min_y))
     }
     pub fn plan_normal_notes(
@@ -213,8 +213,11 @@ impl ReplayRenderer {
         fail_state: Option<&FailAnimationState>,
     ) {
         let judgment_y = layout.stage.hit_y;
-        let top_y = layout.stage.top_y;
-        let bottom_y = layout.stage.bottom_y;
+        // Culling and clipping follow the drawn playfield, not the skin box: in
+        // 9:16 they differ, and using the box leaves note heads floating above
+        // the fill with their long-note bodies cut off at its edge.
+        let top_y = layout.stage.view_top_y;
+        let bottom_y = layout.stage.view_bottom_y;
         let frame_eps_ms = 1000.0 / self.cfg.fps.max(1) as f32;
         for &idx in active_indices {
             let ho = &notes[idx];
@@ -251,7 +254,7 @@ impl ReplayRenderer {
                 skin.config.width_for_note_height_scale,
                 layout.scale_y,
             );
-            let head_top_y = head_bottom_y - note_h as i32;
+            let head_top_y = scroll_piece_top_y(layout.upside_down, head_bottom_y, note_h as i32);
             let base_note_x = column.x + padding;
             if head_top_y > bottom_y || (head_top_y + note_h as i32) < top_y {
                 continue;
@@ -369,8 +372,11 @@ impl ReplayRenderer {
         fail_state: Option<&FailAnimationState>,
     ) {
         let judgment_y = layout.stage.hit_y;
-        let top_y = layout.stage.top_y;
-        let bottom_y = layout.stage.bottom_y;
+        // Culling and clipping follow the drawn playfield, not the skin box: in
+        // 9:16 they differ, and using the box leaves note heads floating above
+        // the fill with their long-note bodies cut off at its edge.
+        let top_y = layout.stage.view_top_y;
+        let bottom_y = layout.stage.view_bottom_y;
         for &idx in active_indices {
             let ho = &notes[idx];
             let col = ho.column as usize;
@@ -436,7 +442,8 @@ impl ReplayRenderer {
                 });
             let head_bottom_y = scroll_target_y(layout, judgment_y, head_dist);
             let tail_bottom_y = scroll_target_y(layout, judgment_y, tail_dist);
-            let tail_top_y = tail_bottom_y - tail_h as i32;
+            let tail_top_y =
+                scroll_piece_top_y(layout.upside_down, tail_bottom_y, tail_h as i32);
             let ln_info = self.compute_ln_render_info(
                 ho,
                 state_time_ms,
@@ -483,21 +490,26 @@ impl ReplayRenderer {
             );
             let body_height = ln_info.body_bottom_y - ln_info.body_top_y;
             if body_height > 0 {
-                let clamped_top = top_y.max(ln_info.body_top_y);
-                // Held LNs clip at the receptor; broken or released LNs can pass through.
-                let clip_bottom = if ln_info.allow_pass {
-                    bottom_y
+                // Held LNs clip at the receptor; broken or released LNs can pass
+                // through. The body trails away from the receptor, so which edge
+                // the receptor bounds depends on the scroll direction: the bottom
+                // one going down, the top one going up.
+                let receptor_edge = judgment_y + head_h as i32 / 2;
+                let (clamped_top, clamped_bottom) = if ln_info.allow_pass {
+                    (
+                        top_y.max(ln_info.body_top_y),
+                        bottom_y.min(ln_info.body_bottom_y),
+                    )
                 } else if layout.upside_down {
-                    judgment_y - head_h as i32 / 2
+                    (
+                        top_y.max(ln_info.body_top_y).max(receptor_edge),
+                        bottom_y.min(ln_info.body_bottom_y),
+                    )
                 } else {
-                    judgment_y + head_h as i32 / 2
-                };
-                let clamped_bottom = if layout.upside_down {
-                    clip_bottom
-                        .max(ln_info.body_top_y)
-                        .min(ln_info.body_bottom_y)
-                } else {
-                    clip_bottom.min(ln_info.body_bottom_y)
+                    (
+                        top_y.max(ln_info.body_top_y),
+                        receptor_edge.min(ln_info.body_bottom_y),
+                    )
                 };
                 if clamped_bottom > clamped_top {
                     self.plan_long_note_body(
@@ -604,11 +616,27 @@ impl ReplayRenderer {
             let tail_should_show = ln_info.show_ln && tail_in_bounds;
             if tail_should_show {
                 let mut draw_tail_h = tail_h as i32;
+                let mut draw_tail_y = ln_info.tail_top_y;
                 let mut tail_uv = [0.0, 1.0, 1.0, 0.0];
                 if ln_info.held {
                     // While holding, the tail is clipped so it never visually crosses the head anchor.
                     let head_anchor_y = ln_info.head_top_y + head_h as i32 / 2;
-                    if tail_end_y > head_anchor_y {
+                    if layout.upside_down {
+                        // Scrolling up the tail arrives from below, so the part to
+                        // keep is the one further down and the sprite has to start
+                        // at the anchor instead of at the tail top.
+                        if ln_info.tail_top_y < head_anchor_y {
+                            let visible_h = tail_end_y - head_anchor_y;
+                            if visible_h <= 0 {
+                                draw_tail_h = 0;
+                            } else if (visible_h as u32) < tail_h {
+                                let ratio = visible_h as f32 / tail_h as f32;
+                                tail_uv[1] = ratio;
+                                draw_tail_h = visible_h;
+                                draw_tail_y = head_anchor_y;
+                            }
+                        }
+                    } else if tail_end_y > head_anchor_y {
                         let visible_h = head_anchor_y - ln_info.tail_top_y;
                         if visible_h <= 0 {
                             draw_tail_h = 0;
@@ -647,7 +675,7 @@ impl ReplayRenderer {
                 let mut sprite = SpriteCommand {
                     texture_id: tail_texture,
                     x: shared_x,
-                    y: ln_info.tail_top_y,
+                    y: draw_tail_y,
                     width: target_w,
                     height: draw_tail_h as u32,
                     tint,
@@ -1306,12 +1334,12 @@ impl ReplayRenderer {
         head_bottom_y: i32,
         release_head_bottom_y: Option<i32>,
         tail_top_y: i32,
-        _top_y: i32,
+        top_y: i32,
         bottom_y: i32,
     ) -> LnRenderInfo {
         let end_time = ho.end_time.unwrap_or(ho.time);
         let mut info = LnRenderInfo::default();
-        info.head_top_y = head_bottom_y - head_h;
+        info.head_top_y = scroll_piece_top_y(upside_down, head_bottom_y, head_h);
         info.tail_top_y = tail_top_y;
         let head_center_y = info.head_top_y + head_h / 2;
         let tail_center_y = info.tail_top_y + tail_h / 2;
@@ -1371,7 +1399,14 @@ impl ReplayRenderer {
             && !rel_is_50
             && rel_is_good
             && rel_time.is_some_and(|rt| timestamp >= rt);
-        let tail_off_screen = tail_top_y > bottom_y + 50;
+        // Notes leave the playfield past the edge opposite the one they entered
+        // from. Testing only the bottom made every not-yet-reached LN look like it
+        // had already left when scrolling up, which retired it before it was drawn.
+        let tail_off_screen = if upside_down {
+            tail_top_y + tail_h < top_y - 50
+        } else {
+            tail_top_y > bottom_y + 50
+        };
         // Bad releases keep the LN visible until the tail clears the playfield.
         let pass_through_finished = (is_double_tap || rel_is_50 || rel_is_miss) && tail_off_screen;
         let consumed =
@@ -1434,11 +1469,16 @@ impl ReplayRenderer {
             } else {
                 judgment_y.min(head_bottom_y)
             };
-            info.head_top_y = clamped_head_bottom - head_h;
+            info.head_top_y = scroll_piece_top_y(upside_down, clamped_head_bottom, head_h);
             let head_center_y = info.head_top_y + head_h / 2;
-            let tail_has_reached_receptor = info.tail_top_y + tail_h >= judgment_y;
+            // The tail reaches the receptor from below when scrolling up.
+            let tail_has_reached_receptor = if upside_down {
+                info.tail_top_y <= judgment_y
+            } else {
+                info.tail_top_y + tail_h >= judgment_y
+            };
             if tail_has_reached_receptor {
-                info.tail_top_y = judgment_y - tail_h;
+                info.tail_top_y = scroll_piece_top_y(upside_down, judgment_y, tail_h);
                 info.body_top_y = head_center_y;
                 info.body_bottom_y = head_center_y;
             } else {
@@ -1448,7 +1488,8 @@ impl ReplayRenderer {
             }
         } else if release_active && (rel_is_miss || rel_is_50 || is_double_tap) {
             if let Some(release_head_bottom_y) = release_head_bottom_y {
-                let release_head_top_y = release_head_bottom_y - head_h;
+                let release_head_top_y =
+                    scroll_piece_top_y(upside_down, release_head_bottom_y, head_h);
                 let release_body_anchor_y = release_head_top_y + head_h / 2;
                 let tail_center_y = info.tail_top_y + tail_h / 2;
                 info.head_top_y = release_head_top_y;
@@ -1486,6 +1527,16 @@ fn scroll_target_y(layout: &ManiaLayoutInfo, judgment_y: i32, dist_px: f32) -> i
         judgment_y + dist_px.round() as i32
     } else {
         judgment_y - dist_px.round() as i32
+    }
+}
+/// Top edge of a note piece whose leading edge sits at `lead_y`. The leading edge
+/// is the sprite's bottom when scrolling down and its top when scrolling up, so a
+/// piece always sits on the side of the judgement line it is travelling from.
+fn scroll_piece_top_y(upside_down: bool, lead_y: i32, height: i32) -> i32 {
+    if upside_down {
+        lead_y
+    } else {
+        lead_y - height
     }
 }
 fn combine_uv_flip(mut uv: [f32; 4], flip_y: bool) -> [f32; 4] {

@@ -196,9 +196,7 @@ impl ManiaVideoConverter {
         self.progress(10, "Loading skin...");
         let mut skin = self.load_skin(skin_path, set_dir, key_count)?;
         println!("   skin: {} images loaded", skin.image_count());
-        let resolved_hud_config = self.settings.hud_config.as_ref().map(|cfg| {
-            resolve_hud_config(cfg, self.settings.width as f32, self.settings.height as f32)
-        });
+        let resolved_hud_config = self.resolve_hud_config_for_canvas();
         let layout = self.build_layout(key_count, &skin, resolved_hud_config.as_ref());
         println!(
             "   layout: {}k, stage {}x{} at ({}, {})",
@@ -731,8 +729,7 @@ impl ManiaVideoConverter {
         let mut note_window = NoteWindow::default();
         const EXTRA_VISIBLE_PX: f64 = 12.0;
         let look_behind = 500;
-        let visible_dist_px =
-            (prepared.layout.stage.hit_y - prepared.layout.stage.top_y).max(1) as f64;
+        let visible_dist_px = prepared.layout.scroll_travel_px() as f64;
         let replay_final_score = replay.replay.total_score as u64;
         let total_judgments = prepared.score_judgments.len();
         let mut judgment_idx = 0usize;
@@ -1026,6 +1023,7 @@ impl ManiaVideoConverter {
                     self.settings.height,
                     &prepared.skin,
                     results_data,
+                    prepared.resolved_hud_config.as_ref(),
                 );
                 for i in 0..prepared.end_sequence.results_frames {
                     let results_frame =
@@ -1064,6 +1062,107 @@ impl ManiaVideoConverter {
             frames_rendered: prepared.intro_frames + rendered + rendered_results,
             replay_integrity: prepared.replay_integrity.clone(),
         })
+    }
+    /// The results screen as a single PNG, for the HUD editor. It is CPU-drawn,
+    /// so it skips the whole GPU path the gameplay preview needs.
+    ///
+    /// With `elements_out` the PNG carries only the background and every other
+    /// piece goes to a sprite atlas, which is what lets the editor treat them as
+    /// layers instead of a picture of layers.
+    pub fn render_results_preview_frame(
+        &self,
+        osr_path: Option<&Path>,
+        output_path: &Path,
+        skin_path: Option<&Path>,
+        opts: &ResolveOpts,
+        elements_out: Option<&Path>,
+    ) -> Result<PathBuf, ConvertError> {
+        println!("-> results preview frame");
+        self.progress(0, "Preparing results preview...");
+        let width = self.settings.width.max(1);
+        let height = self.settings.height.max(1);
+
+        let (data, skin, background_path) = match osr_path {
+            Some(osr_path) => {
+                let mut replay = parser::parse_osr_file(osr_path)
+                    .map_err(|e| ConvertError::Parse(e.to_string()))?;
+                self.ensure_rd_not_enabled(&replay.replay)?;
+                self.progress(10, "Resolving beatmap...");
+                let (beatmap_path, _, _) = self.resolve_beatmap(&replay, opts)?;
+                let beatmap = parser::parse_osu_file_with_options(
+                    &beatmap_path,
+                    parser::ParseBeatmapOptions {
+                        storyboard_enabled: false,
+                    },
+                )
+                .map_err(|e| ConvertError::Parse(e.to_string()))?;
+                let beatmap =
+                    self.resolve_playable_mania_beatmap(&replay.replay, beatmap, &beatmap_path)?;
+                let key_count = self.effective_key_count(&beatmap);
+                replay.key_actions =
+                    ManiaReplayData::derive_key_actions(&replay.frames, key_count);
+                let set_dir = beatmap_path
+                    .parent()
+                    .unwrap_or(Path::new("."))
+                    .to_path_buf();
+                let set_files = self.list_dir_files_recursive(&set_dir);
+                self.progress(30, "Scoring replay...");
+                let prepared = self.prepare_replay_render(
+                    &mut replay,
+                    beatmap,
+                    &beatmap_path,
+                    &set_dir,
+                    &set_files,
+                    output_path,
+                    skin_path,
+                    opts,
+                    None,
+                    false,
+                )?;
+                let data = prepared.results_data.clone().ok_or_else(|| {
+                    ConvertError::Render("replay produced no results data".to_string())
+                })?;
+                (data, prepared.skin, prepared.results_background_path.clone())
+            }
+            None => {
+                self.progress(30, "Loading skin...");
+                let key_count = self.hud_editor_preview_key_count();
+                let skin = self.load_skin(skin_path, Path::new("."), key_count)?;
+                (crate::results::sample_results_screen_data(), skin, None)
+            }
+        };
+
+        self.progress(70, "Drawing results screen...");
+        let background = load_results_background_frame(background_path.as_deref(), width, height)
+            .unwrap_or_else(|| vec![0u8; (width * height * 4) as usize]);
+        let renderer = crate::results::ResultsSceneRenderer::new(
+            &background,
+            width,
+            height,
+            &skin,
+            &data,
+            // No config: the base is the built-in screen, and the editor draws
+            // the user's own design over it.
+            None,
+        );
+        let image = match elements_out {
+            Some(atlas_path) => {
+                let sprites = renderer.element_sprites();
+                write_results_element_atlas(atlas_path, &sprites, width, height)?;
+                image::RgbaImage::from_raw(width, height, background)
+                    .ok_or_else(|| ConvertError::Render("results frame size mismatch".to_string()))?
+            }
+            None => {
+                let frame = renderer.render_with_progress(1.0);
+                image::RgbaImage::from_raw(width, height, frame)
+                    .ok_or_else(|| ConvertError::Render("results frame size mismatch".to_string()))?
+            }
+        };
+        image
+            .save(output_path)
+            .map_err(|e| ConvertError::Render(format!("failed to save preview: {}", e)))?;
+        self.progress(100, "Results preview ready");
+        Ok(output_path.to_path_buf())
     }
     pub fn render_preview_frame(
         &self,
@@ -1249,8 +1348,7 @@ impl ManiaVideoConverter {
         let mut note_window = NoteWindow::default();
         const EXTRA_VISIBLE_PX: f64 = 12.0;
         let look_behind = 500;
-        let visible_dist_px =
-            (prepared.layout.stage.hit_y - prepared.layout.stage.top_y).max(1) as f64;
+        let visible_dist_px = prepared.layout.scroll_travel_px() as f64;
         let current_dist = distance_at_ms(frame_time);
         let behind_dist = if look_behind > 0 {
             (current_dist - distance_at_ms(frame_time - look_behind)).abs()
@@ -1454,6 +1552,74 @@ fn fmt_time(secs: f32) -> String {
 fn ease_out_cubic(progress: f32) -> f32 {
     let clamped = progress.clamp(0.0, 1.0);
     1.0 - (1.0 - clamped).powi(3)
+}
+/// Writes the sprite atlas and prints where each piece sits, both on the real
+/// canvas and inside the atlas. The editor needs the first to place the layer
+/// and the second to cut the pixels out.
+fn write_results_element_atlas(
+    atlas_path: &Path,
+    sprites: &[crate::results::ResultsElementSprite],
+    width: u32,
+    height: u32,
+) -> Result<(), ConvertError> {
+    let atlas = crate::results::pack_element_atlas(sprites, width);
+    if let Some(atlas) = &atlas {
+        atlas
+            .image
+            .save(atlas_path)
+            .map_err(|e| ConvertError::Render(format!("failed to save element atlas: {}", e)))?;
+    }
+    let mut entries: Vec<serde_json::Value> = sprites
+        .iter()
+        .map(|sprite| {
+            let placement = atlas.as_ref().and_then(|atlas| {
+                atlas
+                    .placements
+                    .iter()
+                    .find(|placement| placement.element == sprite.element)
+            });
+            serde_json::json!({
+                "id": sprite.element.id(),
+                "x": sprite.x,
+                "y": sprite.y,
+                "width": sprite.image.width(),
+                "height": sprite.image.height(),
+                "source": if placement.is_some() { "atlas" } else { "image" },
+                "atlasX": placement.map(|p| p.atlas_x).unwrap_or(0),
+                "atlasY": placement.map(|p| p.atlas_y).unwrap_or(0),
+            })
+        })
+        .collect();
+            // Offer the layer even with no beatmap, or the saved design loses it.
+    let background = crate::results::ResultsElement::Background;
+    if !sprites
+        .iter()
+        .any(|sprite| sprite.element == background)
+    {
+        entries.insert(
+            0,
+            serde_json::json!({
+                "id": background.id(),
+                "x": 0,
+                "y": 0,
+                "width": width,
+                "height": height,
+                "source": "image",
+                "atlasX": 0,
+                "atlasY": 0,
+            }),
+        );
+    }
+    let manifest = serde_json::json!({
+        "canvas": { "width": width, "height": height },
+        "atlas": {
+            "width": atlas.as_ref().map(|a| a.image.width()).unwrap_or(0),
+            "height": atlas.as_ref().map(|a| a.image.height()).unwrap_or(0),
+        },
+        "elements": entries,
+    });
+    println!("[results-elements] {}", manifest);
+    Ok(())
 }
 const RESULTS_BACKGROUND_IMAGE_OPACITY: f32 = 0.40;
 fn load_results_background_frame(

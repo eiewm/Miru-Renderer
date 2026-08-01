@@ -33,6 +33,8 @@ pub struct ConverterSettings {
     pub gpu_preference: GpuPreference,
     pub music_volume_percent: f32,
     pub hitsound_volume_percent: f32,
+    // None keeps whatever the skin declares in its UpsideDown setting.
+    pub scroll_direction: Option<ScrollDirection>,
 }
 impl Default for ConverterSettings {
     fn default() -> Self {
@@ -68,6 +70,7 @@ impl Default for ConverterSettings {
             gpu_preference: GpuPreference::High,
             music_volume_percent: 100.0,
             hitsound_volume_percent: 100.0,
+            scroll_direction: None,
         }
     }
 }

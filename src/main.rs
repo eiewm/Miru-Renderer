@@ -5,6 +5,7 @@ use miru_renderer::converter::{
     ConverterSettings, ManiaVideoConverter, ReplayIntegrityReport, ResolveOpts,
 };
 use miru_renderer::hud::parse_hud_config_json;
+use miru_renderer::modes::mania::layout::ScrollDirection;
 use miru_renderer::parser;
 use miru_renderer::renderer::gpu::context::GpuPreference;
 use miru_renderer::utils::{
@@ -64,7 +65,17 @@ fn mapset_cache_cleanup_for(
     })
 }
 const DEFAULT_MAX_RENDER_DURATION_MS: i64 = 600_000;
-const SUPPORTED_RENDER_RESOLUTIONS: &[(u32, u32)] = &[(1280, 720), (1920, 1080)];
+// 9:16 for phone-shaped video; the last four are the versus split per player.
+const SUPPORTED_RENDER_RESOLUTIONS: &[(u32, u32)] = &[
+    (1280, 720),
+    (1920, 1080),
+    (720, 1280),
+    (1080, 1920),
+    (720, 640),
+    (1080, 960),
+    (720, 576),
+    (1080, 864),
+];
 const SUPPORTED_FPS: &[u32] = &[60];
 fn parse_volume_percent(value: &str) -> Result<f32, String> {
     let parsed = value
@@ -98,6 +109,13 @@ struct Cli {
     skin: Option<PathBuf>,
     #[arg(long = "ss", visible_alias = "sp", default_value = "30.0")]
     scroll_speed: f32,
+    // "sd" is already taken by --songs-dir.
+    #[arg(
+        long = "scroll-direction",
+        visible_alias = "sdir",
+        value_name = "down|up"
+    )]
+    scroll_direction: Option<String>,
     #[arg(long = "lead-in", visible_alias = "li", default_value = "1500")]
     lead_in: i32,
     #[arg(long, short = 'f', default_value = "60")]
@@ -183,6 +201,14 @@ struct Cli {
     preview_time_ms: Option<i32>,
     #[arg(long = "hud-editor-preview", visible_alias = "hep")]
     hud_editor_preview: bool,
+    #[arg(long = "preview-results", visible_alias = "pvr")]
+    preview_results: bool,
+    #[arg(
+        long = "preview-results-elements",
+        visible_alias = "pvre",
+        value_name = "FILE"
+    )]
+    preview_results_elements: Option<PathBuf>,
     #[arg(long = "hud-editor-layout-only", visible_alias = "helo")]
     hud_editor_layout_only: bool,
     #[arg(long = "report-out", visible_alias = "ro", value_name = "FILE")]
@@ -254,7 +280,7 @@ fn validate_cli(cli: &Cli) -> Result<(), String> {
         );
     }
     let standalone_hud_preview = cli.preview_out.is_some()
-        && cli.hud_editor_preview
+        && (cli.hud_editor_preview || cli.preview_results)
         && cli.replay.is_none()
         && cli.osu.is_none()
         && cli.mapset.is_none();
@@ -330,6 +356,13 @@ fn validate_cli(cli: &Cli) -> Result<(), String> {
     }
     if cli.lead_in < 0 {
         return Err(format!("lead-in must be >= 0 (got {})", cli.lead_in));
+    }
+    if let Some(direction) = cli.scroll_direction.as_deref() {
+        if ScrollDirection::parse(direction).is_none() {
+            return Err(format!(
+                "unsupported scroll direction {direction} (supported: down, up)"
+            ));
+        }
     }
     if let Some(start) = cli.start {
         if !start.is_finite() {
@@ -648,6 +681,10 @@ fn main() -> ExitCode {
         gpu_preference,
         music_volume_percent: cli.music_volume,
         hitsound_volume_percent: cli.hitsound_volume,
+        scroll_direction: cli
+            .scroll_direction
+            .as_deref()
+            .and_then(ScrollDirection::parse),
         ..Default::default()
     };
     let mut selected_osu = cli.osu.clone();
@@ -733,6 +770,26 @@ fn main() -> ExitCode {
             let safe_msg = msg.replace(['\r', '\n'], " ");
             println!("[preview-progress] {} {}", pct.min(100), safe_msg);
         }));
+    }
+    if cli.preview_results {
+        if let Some(preview_path) = &cli.preview_out {
+            match converter.render_results_preview_frame(
+                cli.replay.as_deref(),
+                preview_path,
+                cli.skin.as_deref(),
+                &resolve_opts,
+                cli.preview_results_elements.as_deref(),
+            ) {
+                Ok(path) => {
+                    println!("ok: preview saved to {}", path.display());
+                    return ExitCode::SUCCESS;
+                }
+                Err(e) => {
+                    eprintln!("err: preview failed: {}", e);
+                    return ExitCode::from(1);
+                }
+            }
+        }
     }
     if cli.replay.is_none() && selected_osu.is_none() && cli.hud_editor_preview {
         if let Some(preview_path) = &cli.preview_out {

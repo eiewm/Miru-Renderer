@@ -1,9 +1,13 @@
 use super::super::render::{HudAssetFrame, HudJudgmentCounterAnimation, ReplayRenderer};
 use super::super::sprites::{z_order, SpriteCommand, SpritePlanner};
 use crate::hud::{
-    HudAssetRefConfig, HudElementConfig, HudFontRefConfig, HudLayerConfig, HudLayerTransformConfig,
+    hud_asset_dimensions_within_limits, hud_asset_file_within_limits, hud_asset_path,
+    HudElementConfig, HudFontRefConfig, HudLayerConfig, HudLayerTransformConfig,
+    HUD_GIF_MAX_FRAMES, HUD_GIF_MAX_TOTAL_PIXELS,
 };
-use crate::intro::{font_bold, font_regular, FontWeight, RenderedText};
+use crate::intro::{
+    embedded_cjk_fallbacks, font_bold, font_regular, FontWeight, RenderedText,
+};
 use crate::renderer::gpu::SpriteBlendMode;
 use crate::renderer::replay_renderer::state::{HitErrorWindows, HudFrameState};
 use crate::types::JudgmentKind;
@@ -21,12 +25,6 @@ const KEY_COUNTER_TAIL_SPEED_MULTIPLIER: f32 = 1.45;
 const HUD_TEXT_SUPERSAMPLE: f32 = 2.0;
 const HUD_TEXT_VISUAL_SCALE: f32 = 1.24;
 const HUD_TEXT_FALLBACK_FAMILIES: &[&str] = &["Noto Sans JP", "Noto Sans"];
-// Custom HUD assets are user-supplied, so every decode path enforces file, dimension, and frame caps.
-const HUD_ASSET_MAX_FILE_BYTES: u64 = 10 * 1024 * 1024;
-const HUD_ASSET_MAX_DIMENSION: u32 = 4096;
-const HUD_ASSET_MAX_PIXELS: u64 = 8_294_400;
-const HUD_GIF_MAX_FRAMES: usize = 120;
-const HUD_GIF_MAX_TOTAL_PIXELS: u64 = 60_000_000;
 const JUDGMENT_COLORS: [[f32; 4]; 6] = [
     [0.56, 0.87, 1.0, 1.0],
     [0.98, 0.64, 0.01, 1.0],
@@ -1411,28 +1409,6 @@ fn collect_hud_nodes(
             );
         }
     }
-}
-fn hud_asset_path(asset: &HudAssetRefConfig) -> Option<std::path::PathBuf> {
-    asset
-        .path
-        .as_deref()
-        .map(Path::new)
-        .filter(|path| path.is_file())
-        .map(Path::to_path_buf)
-}
-fn hud_asset_file_within_limits(path: &Path) -> bool {
-    std::fs::metadata(path)
-        .map(|metadata| metadata.len() > 0 && metadata.len() <= HUD_ASSET_MAX_FILE_BYTES)
-        .unwrap_or(false)
-}
-fn hud_asset_dimensions_within_limits(width: u32, height: u32) -> bool {
-    if width == 0 || height == 0 {
-        return false;
-    }
-    if width > HUD_ASSET_MAX_DIMENSION || height > HUD_ASSET_MAX_DIMENSION {
-        return false;
-    }
-    (width as u64).saturating_mul(height as u64) <= HUD_ASSET_MAX_PIXELS
 }
 fn sanitize_texture_component(value: &str) -> String {
     let sanitized = value
@@ -3962,6 +3938,11 @@ impl ReplayRenderer {
             };
             if let Some(font) = embedded_fallback {
                 font_refs.push(font);
+            }
+            // Ubuntu has no CJK coverage, so HUD text bound to japanese beatmap
+            // metadata needs the same fallbacks the intro and results use.
+            for fallback in embedded_cjk_fallbacks() {
+                font_refs.push(fallback);
             }
             let mut rendered = render_hud_text_with_fonts(text, render_size, color, &font_refs)?;
             self.embolden_hud_text(&mut rendered, family, weight);

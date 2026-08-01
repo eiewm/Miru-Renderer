@@ -1,15 +1,20 @@
-use super::animation::{results_animation_state, AnimatedElement};
+use super::animation::{results_animation_state, AnimatedElement, ResultsAnimationState};
+use super::custom::{draw_custom_results, scene_uses_elements, ResultsMedia};
 use super::assets::{resolve_results_assets, ResultsAssets, SkinSprite};
+use super::elements::{
+    opaque_bounds, ResultsElement, ResultsElementSprite, ResultsElementSprites, RESULTS_ELEMENTS,
+};
 use super::digits::{compose_digit_sprite, DigitSpriteKind};
 use super::layout::{
     compute_results_layout, JudgmentRowLayout, LayoutPoint, LayoutRect, ResultsLayout,
 };
-use super::{ResultsScreenData, ResultsTimingSummary};
+use super::{ResultsScreenData, ResultsTimingSummary, RESULTS_DURATION_MS};
 use crate::intro::{
     create_mod_badge_from_image_spec, create_mod_badge_from_spec, font_ubuntu_regular,
     measure_text, measure_text_with_font, render_text, render_text_simple,
     render_text_simple_with_font, render_text_with_font, FontWeight,
 };
+use crate::hud::{HudConfig, HudResultsSceneConfig};
 use crate::types::{ReplayOrigin, SkinAssets};
 use crate::utils::image_proc::resize_exact;
 use ab_glyph::{Font, PxScale, ScaleFont};
@@ -59,6 +64,11 @@ pub(crate) struct ResultsSceneRenderer {
     title_lines: [Option<BaselineTextImage>; 3],
     timing_block: TimingTextBlock,
     judgment_rows: Vec<JudgmentRowSprite>,
+    /// The user's own design. Absent means the stock screen.
+    custom_scene: Option<HudResultsSceneConfig>,
+    custom_media: ResultsMedia,
+    /// Ready only when the design composes the screen out of `results.*` layers.
+    element_sprites: ResultsElementSprites,
 }
 impl ResultsSceneRenderer {
     pub(crate) fn new(
@@ -67,7 +77,17 @@ impl ResultsSceneRenderer {
         height: u32,
         skin: &SkinAssets,
         data: &ResultsScreenData,
+        hud_config: Option<&HudConfig>,
     ) -> Self {
+        // Present but empty is treated as absent: a blank screen is never intended.
+        let custom_scene = hud_config
+            .and_then(|config| config.results.as_ref())
+            .filter(|scene| !scene.layers.is_empty())
+            .cloned();
+        let custom_media = match (custom_scene.as_ref(), hud_config) {
+            (Some(scene), Some(config)) => ResultsMedia::load(scene, &config.assets),
+            _ => ResultsMedia::default(),
+        };
         let layout = compute_results_layout(width, height);
         let assets = resolve_results_assets(skin, data.grade);
         let mut prepared_assets = prepare_assets(&assets, &layout);
@@ -168,7 +188,8 @@ impl ResultsSceneRenderer {
         )
         .map(|rendered| rendered.image);
         let judgment_rows = build_judgment_rows(skin, &prepared_assets, &layout, data);
-        Self {
+        let composes_from_elements = custom_scene.as_ref().is_some_and(scene_uses_elements);
+        let mut renderer = Self {
             width,
             layout,
             data: data.clone(),
@@ -184,6 +205,99 @@ impl ResultsSceneRenderer {
             title_lines,
             timing_block,
             judgment_rows,
+            custom_scene,
+            custom_media,
+            element_sprites: ResultsElementSprites::default(),
+        };
+        if composes_from_elements {
+            renderer.element_sprites = ResultsElementSprites::new(renderer.build_element_sprites());
+        }
+        renderer
+    }
+    /// Each element drawn on its own and cropped, so the editor can put the very
+    /// same pixels wherever the layer ends up.
+    pub(crate) fn element_sprites(&self) -> Vec<ResultsElementSprite> {
+        self.build_element_sprites()
+    }
+    fn build_element_sprites(&self) -> Vec<ResultsElementSprite> {
+        let width = self.base_background.width();
+        let height = self.base_background.height();
+        // One scratch canvas for all of them: at 1080p a fresh one per element
+        // would be 170 MB of allocation for nothing.
+        let mut scratch = RgbaImage::from_pixel(width, height, Rgba([0, 0, 0, 0]));
+        let mut out = Vec::new();
+        for element in RESULTS_ELEMENTS {
+            if element == ResultsElement::Background {
+                if let Some((x, y, w, h)) = opaque_bounds(&self.base_background) {
+                    out.push(ResultsElementSprite {
+                        element,
+                        x: x as i32,
+                        y: y as i32,
+                        image: image::imageops::crop_imm(&self.base_background, x, y, w, h)
+                            .to_image(),
+                    });
+                }
+                continue;
+            }
+            for pixel in scratch.pixels_mut() {
+                *pixel = Rgba([0, 0, 0, 0]);
+            }
+            self.draw_element_sprite(&mut scratch, element);
+            let Some((x, y, w, h)) = opaque_bounds(&scratch) else {
+                continue;
+            };
+            out.push(ResultsElementSprite {
+                element,
+                x: x as i32,
+                y: y as i32,
+                image: image::imageops::crop_imm(&scratch, x, y, w, h).to_image(),
+            });
+        }
+        out
+    }
+    /// The element at rest: no entry animation, and no data gate either, so the
+    /// editor can place the full-combo ribbon on a play that dropped combo.
+    fn draw_element_sprite(&self, canvas: &mut RgbaImage, element: ResultsElement) {
+        const STILL: AnimatedElement = AnimatedElement {
+            alpha: 1.0,
+            offset_x: 0.0,
+            offset_y: 0.0,
+        };
+        match element {
+            ResultsElement::Perfect => self.draw_perfect_ribbon(canvas, STILL),
+            other => self.draw_element(canvas, other, STILL, 1.0),
+        }
+    }
+    fn draw_element(
+        &self,
+        canvas: &mut RgbaImage,
+        element: ResultsElement,
+        anim: AnimatedElement,
+        graph_line_progress: f32,
+    ) {
+        match element {
+            ResultsElement::Background => {
+                alpha_blit(canvas, &self.base_background, 0, 0, anim.alpha)
+            }
+            ResultsElement::Panel => self.draw_panel(canvas, anim),
+            ResultsElement::TitleBar => self.draw_title_bar(canvas, anim),
+            ResultsElement::TitleLogo => self.draw_title_logo(canvas, anim),
+            ResultsElement::Title => self.draw_title_line(canvas, 0, anim),
+            ResultsElement::Mapper => self.draw_title_line(canvas, 1, anim),
+            ResultsElement::Player => self.draw_title_line(canvas, 2, anim),
+            ResultsElement::Mods => self.draw_mod_badges(canvas, anim),
+            ResultsElement::Score => self.draw_score(canvas, anim),
+            ResultsElement::Rank => self.draw_grade(canvas, anim),
+            ResultsElement::Judgment(index) => {
+                if let Some(row) = self.judgment_rows.get(index) {
+                    self.draw_judgment_row(canvas, row, anim);
+                }
+            }
+            ResultsElement::Combo => self.draw_combo(canvas, anim),
+            ResultsElement::Accuracy => self.draw_accuracy(canvas, anim),
+            ResultsElement::Graph => self.draw_graph(canvas, anim, graph_line_progress),
+            ResultsElement::Timing => self.draw_timing_summary(canvas, anim),
+            ResultsElement::Perfect => self.draw_perfect(canvas, anim),
         }
     }
     pub(crate) fn render_frame(&self, frame_index: u64, total_frames: u64) -> Vec<u8> {
@@ -196,58 +310,104 @@ impl ResultsSceneRenderer {
     }
     pub(crate) fn render_with_progress(&self, progress: f32) -> Vec<u8> {
         let state = results_animation_state(progress);
-        let mut canvas = self.base_background.clone();
-        self.draw_panel(&mut canvas, state.panel);
-        self.draw_title(&mut canvas, state.title);
-        self.draw_mod_badges(&mut canvas, state.title);
-        self.draw_score(&mut canvas, state.score);
-        self.draw_grade(&mut canvas, state.grade);
+        // Composing from `results.*` layers puts the background on the same
+        // footing as everything else: it is a layer, and a layer can be dropped.
+        let composes_from_elements = !self.element_sprites.is_empty();
+        let mut canvas = if composes_from_elements {
+            RgbaImage::from_pixel(
+                self.base_background.width(),
+                self.base_background.height(),
+                Rgba([0, 0, 0, 0]),
+            )
+        } else {
+            self.base_background.clone()
+        };
+        let custom_scene = self.custom_scene.as_ref();
+        let replaces =
+            composes_from_elements || custom_scene.is_some_and(|scene| scene.replaces_default_screen());
+        if !replaces {
+            self.draw_default_screen(&mut canvas, &state);
+        }
+        if let Some(scene) = custom_scene {
+            // GIFs run on the results screen's own clock, not the video's.
+            let elapsed_ms = (progress.clamp(0.0, 1.0) * RESULTS_DURATION_MS as f32) as u32;
+            draw_custom_results(
+                &mut canvas,
+                scene,
+                &self.data,
+                &self.custom_media,
+                elapsed_ms,
+                state.panel.alpha,
+                &self.element_sprites,
+                &state,
+            );
+        }
+        canvas.into_raw()
+    }
+    fn draw_default_screen(&self, canvas: &mut RgbaImage, state: &ResultsAnimationState) {
+        let canvas = &mut *canvas;
+        self.draw_panel(canvas, state.panel);
+        self.draw_title(canvas, state.title);
+        self.draw_mod_badges(canvas, state.title);
+        self.draw_score(canvas, state.score);
+        self.draw_grade(canvas, state.grade);
         for (row, anim) in self
             .judgment_rows
             .iter()
             .zip(state.judgments.iter().copied())
         {
-            self.draw_judgment_row(&mut canvas, row, anim);
+            self.draw_judgment_row(canvas, row, anim);
         }
-        self.draw_combo(&mut canvas, state.combo);
-        self.draw_accuracy(&mut canvas, state.accuracy);
-        self.draw_graph(&mut canvas, state.graph_frame, state.graph_line_progress);
-        self.draw_timing_summary(&mut canvas, state.timing);
-        self.draw_perfect(&mut canvas, state.perfect);
-        canvas.into_raw()
+        self.draw_combo(canvas, state.combo);
+        self.draw_accuracy(canvas, state.accuracy);
+        self.draw_graph(canvas, state.graph_frame, state.graph_line_progress);
+        self.draw_timing_summary(canvas, state.timing);
+        self.draw_perfect(canvas, state.perfect);
     }
     fn draw_title(&self, canvas: &mut RgbaImage, anim: AnimatedElement) {
+        self.draw_title_bar(canvas, anim);
+        self.draw_title_logo(canvas, anim);
+        for index in 0..self.title_lines.len() {
+            self.draw_title_line(canvas, index, anim);
+        }
+    }
+    fn draw_title_bar(&self, canvas: &mut RgbaImage, anim: AnimatedElement) {
         let bar_height = scaled_u32(self.layout.scale, 96.0);
         fill_rect(
             canvas,
             0,
-            0,
+            // The bar travels with the block: on a tall canvas the whole results
+            // screen is centred, so pinning it to y=0 would leave it floating.
+            self.layout.title_top,
             canvas.width(),
             bar_height,
             with_opacity([0x00, 0x00, 0x00, 0xCC], anim.alpha),
         );
-        if let Some(title_asset) = &self.prepared_assets.title {
-            let x = self.width as i32 - self.layout.title_right_inset - title_asset.width() as i32;
-            let y = self.layout.title_top;
-            alpha_blit(
-                canvas,
-                title_asset,
-                x + anim.offset_x.round() as i32,
-                y + anim.offset_y.round() as i32,
-                anim.alpha,
-            );
-        }
-        for (index, line) in self.title_lines.iter().enumerate() {
-            let Some(line) = line else {
-                continue;
-            };
-            let base_origin = self.layout.title_line_origins[index];
-            let origin = LayoutPoint {
-                x: base_origin.x + anim.offset_x.round() as i32,
-                y: base_origin.y - line.baseline_offset + anim.offset_y.round() as i32,
-            };
-            alpha_blit(canvas, &line.image, origin.x, origin.y, anim.alpha);
-        }
+    }
+    fn draw_title_logo(&self, canvas: &mut RgbaImage, anim: AnimatedElement) {
+        let Some(title_asset) = &self.prepared_assets.title else {
+            return;
+        };
+        let x = self.width as i32 - self.layout.title_right_inset - title_asset.width() as i32;
+        let y = self.layout.title_top;
+        alpha_blit(
+            canvas,
+            title_asset,
+            x + anim.offset_x.round() as i32,
+            y + anim.offset_y.round() as i32,
+            anim.alpha,
+        );
+    }
+    fn draw_title_line(&self, canvas: &mut RgbaImage, index: usize, anim: AnimatedElement) {
+        let Some(Some(line)) = self.title_lines.get(index) else {
+            return;
+        };
+        let base_origin = self.layout.title_line_origins[index];
+        let origin = LayoutPoint {
+            x: base_origin.x + anim.offset_x.round() as i32,
+            y: base_origin.y - line.baseline_offset + anim.offset_y.round() as i32,
+        };
+        alpha_blit(canvas, &line.image, origin.x, origin.y, anim.alpha);
     }
     fn draw_panel(&self, canvas: &mut RgbaImage, anim: AnimatedElement) {
         let Some(panel) = &self.prepared_assets.panel else {
@@ -394,6 +554,9 @@ impl ResultsSceneRenderer {
         if !self.data.perfect_combo {
             return;
         }
+        self.draw_perfect_ribbon(canvas, anim);
+    }
+    fn draw_perfect_ribbon(&self, canvas: &mut RgbaImage, anim: AnimatedElement) {
         if let Some(ribbon) = &self.prepared_assets.perfect_ribbon {
             draw_centered(canvas, ribbon, self.layout.perfect_center, anim);
         } else if let Some(label) = &self.perfect_fallback {
@@ -686,7 +849,16 @@ fn stable_results_mod_texture_stem(acronym: &str) -> Option<&'static str> {
     }
 }
 fn scale_panel_sprite(sprite: &SkinSprite, layout: &ResultsLayout) -> RgbaImage {
-    scale_reference_sprite(sprite, layout.scale)
+    let scaled = scale_reference_sprite(sprite, layout.scale);
+    // Ranking panels in skins are taller than the 768-tall reference block; in
+    // 16:9 the canvas edge crops the surplus, which is where the decorative
+    // buttons at the bottom of the artwork disappear. On a tall canvas there is
+    // room to spare and they show up as dead UI, so the block does the cropping.
+    let room = (layout.block_bottom - layout.panel_anchor.y).max(0) as u32;
+    if scaled.height() <= room {
+        return scaled;
+    }
+    image::imageops::crop_imm(&scaled, 0, 0, scaled.width(), room).to_image()
 }
 fn scale_reference_sprite(sprite: &SkinSprite, scale: f32) -> RgbaImage {
     let (width, height) = reference_dimensions(sprite, scale);
@@ -923,7 +1095,7 @@ fn background_canvas(raw: &[u8], width: u32, height: u32) -> RgbaImage {
     RgbaImage::from_raw(width.max(1), height.max(1), raw.to_vec())
         .unwrap_or_else(|| RgbaImage::from_pixel(width.max(1), height.max(1), Rgba([0, 0, 0, 0])))
 }
-fn alpha_blit(canvas: &mut RgbaImage, sprite: &RgbaImage, x: i32, y: i32, opacity: f32) {
+pub(super) fn alpha_blit(canvas: &mut RgbaImage, sprite: &RgbaImage, x: i32, y: i32, opacity: f32) {
     let opacity = opacity.clamp(0.0, 1.0);
     if opacity <= 0.0 {
         return;
@@ -1104,3 +1276,5 @@ fn scaled(scale: f32, value: f32) -> i32 {
 fn scaled_u32(scale: f32, value: f32) -> u32 {
     (value * scale).round().max(1.0) as u32
 }
+#[cfg(test)]
+mod tests;

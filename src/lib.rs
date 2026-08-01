@@ -5,7 +5,6 @@
     clippy::manual_clamp,
     clippy::needless_range_loop,
     clippy::nonminimal_bool,
-    clippy::only_used_in_recursion,
     clippy::overly_complex_bool_expr,
     clippy::search_is_some,
     clippy::should_implement_trait,

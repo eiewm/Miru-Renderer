@@ -1,4 +1,5 @@
-// Results coordinates are authored against osu!'s 1024x768-era skin layout and scale by height.
+// Results coordinates are authored against osu!'s 1024x768-era skin layout.
+const REFERENCE_WIDTH: f32 = 1024.0;
 const REFERENCE_HEIGHT: f32 = 768.0;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct LayoutPoint {
@@ -27,6 +28,8 @@ pub(crate) struct ResultsLayout {
     pub(crate) grade_center: LayoutPoint,
     pub(crate) title_right_inset: i32,
     pub(crate) title_top: i32,
+    /// Bottom of the 1024x768 reference block, in canvas pixels.
+    pub(crate) block_bottom: i32,
     pub(crate) mod_badges_first_center: LayoutPoint,
     pub(crate) mod_badges_step_x: i32,
     pub(crate) judgment_rows: [JudgmentRowLayout; 6],
@@ -45,65 +48,88 @@ fn scaled(scale: f32, value: f32) -> i32 {
 fn scaled_u32(scale: f32, value: f32) -> u32 {
     (value * scale).round().max(1.0) as u32
 }
-fn point(scale: f32, x: f32, y: f32) -> LayoutPoint {
-    LayoutPoint {
-        x: scaled(scale, x),
-        y: scaled(scale, y),
-    }
+/// Where the reference canvas sits inside the real one.
+#[derive(Debug, Clone, Copy)]
+struct Frame {
+    scale: f32,
+    top: i32,
 }
-fn rect(scale: f32, x: f32, y: f32, w: f32, h: f32) -> LayoutRect {
-    LayoutRect {
-        x: scaled(scale, x),
-        y: scaled(scale, y),
-        w: scaled_u32(scale, w),
-        h: scaled_u32(scale, h),
+impl Frame {
+    fn point(self, x: f32, y: f32) -> LayoutPoint {
+        LayoutPoint {
+            x: scaled(self.scale, x),
+            y: self.top + scaled(self.scale, y),
+        }
     }
-}
-fn judgment_row(scale: f32, label_center_x: f32, row_center_y: f32) -> JudgmentRowLayout {
-    JudgmentRowLayout {
-        label_center: point(scale, label_center_x, row_center_y),
-        count_origin: point(scale, label_center_x + 64.0, row_center_y - 26.0),
-        max_icon_size: (scaled_u32(scale, 108.0), scaled_u32(scale, 46.0)),
+    fn rect(self, x: f32, y: f32, w: f32, h: f32) -> LayoutRect {
+        LayoutRect {
+            x: scaled(self.scale, x),
+            y: self.top + scaled(self.scale, y),
+            w: scaled_u32(self.scale, w),
+            h: scaled_u32(self.scale, h),
+        }
+    }
+    fn judgment_row(self, label_center_x: f32, row_center_y: f32) -> JudgmentRowLayout {
+        JudgmentRowLayout {
+            label_center: self.point(label_center_x, row_center_y),
+            count_origin: self.point(label_center_x + 64.0, row_center_y - 26.0),
+            max_icon_size: (scaled_u32(self.scale, 108.0), scaled_u32(self.scale, 46.0)),
+        }
     }
 }
 pub(crate) fn compute_results_layout(output_w: u32, output_h: u32) -> ResultsLayout {
-    let scale = (output_h.max(1) as f32 / REFERENCE_HEIGHT).max(f32::EPSILON);
+    // Scaling by height alone holds while the canvas is at least as wide as the
+    // 4:3 reference. In 9:16 it makes the screen more than twice as wide as the
+    // canvas, and everything to the right of the score falls off the edge.
+    let scale = (output_h.max(1) as f32 / REFERENCE_HEIGHT)
+        .min(output_w.max(1) as f32 / REFERENCE_WIDTH)
+        .max(f32::EPSILON);
+    // Leftover height is split above and below, so on a tall canvas the block sits
+    // centred instead of hanging off the top edge. In 16:9 nothing is left over,
+    // the offset is zero and the layout is exactly what it was.
+    let frame = Frame {
+        scale,
+        top: (((output_h as f32 - REFERENCE_HEIGHT * scale) / 2.0).max(0.0)).round() as i32,
+    };
     ResultsLayout {
         scale,
         title_line_origins: [
-            point(scale, 5.0, 27.0),
-            point(scale, 5.0, 52.0),
-            point(scale, 5.0, 74.0),
+            frame.point(5.0, 27.0),
+            frame.point(5.0, 52.0),
+            frame.point(5.0, 74.0),
         ],
-        panel_anchor: point(scale, 0.0, 102.0),
-        score_origin: point(scale, 160.0, 126.0),
+        panel_anchor: frame.point(0.0, 102.0),
+        score_origin: frame.point(160.0, 126.0),
         grade_center: LayoutPoint {
             // The rank sprite stays pinned to the right edge on ultrawide outputs.
             x: output_w as i32 - scaled(scale, 192.0),
-            y: scaled(scale, 320.0),
+            y: frame.top + scaled(scale, 320.0),
         },
         title_right_inset: scaled(scale, 32.0),
-        title_top: 0,
+        title_top: frame.top,
+        block_bottom: frame.top + scaled(scale, REFERENCE_HEIGHT),
         mod_badges_first_center: LayoutPoint {
             x: output_w as i32 - scaled(scale, 64.0),
-            y: scaled(scale, 416.0),
+            y: frame.top + scaled(scale, 416.0),
         },
         mod_badges_step_x: -scaled(scale, 32.0),
         judgment_rows: [
-            judgment_row(scale, 64.0, 256.0),
-            judgment_row(scale, 64.0, 352.0),
-            judgment_row(scale, 64.0, 448.0),
-            judgment_row(scale, 384.0, 256.0),
-            judgment_row(scale, 384.0, 352.0),
-            judgment_row(scale, 384.0, 448.0),
+            frame.judgment_row(64.0, 256.0),
+            frame.judgment_row(64.0, 352.0),
+            frame.judgment_row(64.0, 448.0),
+            frame.judgment_row(384.0, 256.0),
+            frame.judgment_row(384.0, 352.0),
+            frame.judgment_row(384.0, 448.0),
         ],
-        graph_rect: rect(scale, 256.0, 608.0, 308.0, 156.0),
-        timing_box_origin: point(scale, 582.0, 662.0),
+        graph_rect: frame.rect(256.0, 608.0, 308.0, 156.0),
+        timing_box_origin: frame.point(582.0, 662.0),
         timing_line_gap: scaled(scale, 14.0),
-        accuracy_label_anchor: point(scale, 291.0, 480.0),
-        accuracy_value_origin: point(scale, 310.0, 528.0),
-        combo_label_anchor: point(scale, 8.0, 480.0),
-        combo_value_origin: point(scale, 24.0, 528.0),
-        perfect_center: point(scale, 416.0, 688.0),
+        accuracy_label_anchor: frame.point(291.0, 480.0),
+        accuracy_value_origin: frame.point(310.0, 528.0),
+        combo_label_anchor: frame.point(8.0, 480.0),
+        combo_value_origin: frame.point(24.0, 528.0),
+        perfect_center: frame.point(416.0, 688.0),
     }
 }
+#[cfg(test)]
+mod tests;

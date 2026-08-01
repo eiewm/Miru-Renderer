@@ -691,7 +691,7 @@ impl ReplayRenderer {
         self.load_texture_rgba(name, img.as_raw(), w, h);
     }
     fn pre_create_progress_circle_textures(&mut self) {
-        let size = (LEGACY_SONG_PROGRESS_LAYOUT_BASE_SIZE * screen_right_hud_scale(self.cfg.height))
+        let size = (LEGACY_SONG_PROGRESS_LAYOUT_BASE_SIZE * screen_right_hud_scale(self.cfg.width, self.cfg.height))
             .round()
             .max(1.0) as u32;
         // Progress circles are quantized to percent steps so frame rendering only binds a cached texture.

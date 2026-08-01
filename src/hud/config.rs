@@ -160,6 +160,23 @@ pub struct HudSpaceConfig {
     pub width: Option<f32>,
     pub height: Option<f32>,
 }
+/// The user's own results screen. Absent means the built-in screen is drawn,
+/// which is not the same as present-and-empty: that would draw nothing at all.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct HudResultsSceneConfig {
+    pub space: Option<HudSpaceConfig>,
+    pub layers: Vec<HudLayerConfig>,
+    /// `replace` swaps the built-in screen; anything else draws over it.
+    pub mode: Option<String>,
+}
+impl HudResultsSceneConfig {
+    pub fn replaces_default_screen(&self) -> bool {
+        self.mode
+            .as_deref()
+            .is_some_and(|mode| mode.eq_ignore_ascii_case("replace"))
+    }
+}
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct HudConfig {
@@ -174,6 +191,7 @@ pub struct HudConfig {
     pub metadata: Value,
     pub space: Option<HudSpaceConfig>,
     pub elements: HudElements,
+    pub results: Option<HudResultsSceneConfig>,
 }
 pub fn parse_hud_config_json(input: &str) -> Result<HudConfig, String> {
     if input.len() > MAX_HUD_CONFIG_JSON_BYTES {
@@ -219,8 +237,15 @@ fn validate_hud_config_limits(config: &HudConfig) -> Result<(), String> {
             MAX_HUD_FONTS
         ));
     }
-    let node_count =
-        count_layers(&config.nodes, 1)?.saturating_add(count_layers(&config.layers, 1)?);
+    // The results scene counts against the same cap: otherwise the limit is
+    // sidestepped by sending the extra nodes through it.
+    let results_count = match config.results.as_ref() {
+        Some(scene) => count_layers(&scene.layers, 1)?,
+        None => 0,
+    };
+    let node_count = count_layers(&config.nodes, 1)?
+        .saturating_add(count_layers(&config.layers, 1)?)
+        .saturating_add(results_count);
     if node_count > MAX_HUD_NODES {
         return Err(format!(
             "hud-config has too many nodes: {node_count} > {MAX_HUD_NODES}"
@@ -404,6 +429,8 @@ pub fn resolve_hud_config(config: &HudConfig, canvas_w: f32, canvas_h: f32) -> H
         version: config.version,
         mode: config.mode.clone(),
         canvas: config.canvas.clone(),
+        // Unscaled: the scene carries its own `space` and adjusts when drawn.
+        results: config.results.clone(),
         nodes: config
             .nodes
             .iter()

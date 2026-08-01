@@ -666,7 +666,7 @@ impl ReplayRenderer {
     }
     fn resolve_replay_mod_icon_size(&self, config: Option<&HudElementConfig>) -> (f32, f32) {
         let default_icon_size =
-            REPLAY_MOD_DEFAULT_ICON_SIZE * screen_right_hud_scale(self.cfg.height);
+            REPLAY_MOD_DEFAULT_ICON_SIZE * screen_right_hud_scale(self.cfg.width, self.cfg.height);
         let size_hint = config
             .and_then(|cfg| cfg.size.or(cfg.width).or(cfg.height))
             .filter(|value| value.is_finite() && *value > 0.0)
@@ -1632,6 +1632,7 @@ impl ReplayRenderer {
         age_ms: i32,
         center_x: i32,
         hit_y: i32,
+        hud_anchor_y: i32,
         scale_y: f32,
         anim_fps: u32,
         center_y_override: Option<i32>,
@@ -1715,7 +1716,7 @@ impl ReplayRenderer {
         let top = if let Some(center_y) = center_y_override {
             center_y - (h as i32 / 2)
         } else if let Some(score_y) = skin.config.score_y {
-            (score_y as f32 * scale_y).round() as i32 - (h as i32 / 2)
+            hud_anchor_y + (score_y as f32 * scale_y).round() as i32 - (h as i32 / 2)
         } else {
             (hit_y as f32 - h as f32 * 0.6).round() as i32
         };
@@ -1749,6 +1750,7 @@ impl ReplayRenderer {
         age_ms: i32,
         center_x: i32,
         hit_y: i32,
+        hud_anchor_y: i32,
         scale_y: f32,
         anim_fps: u32,
         center_y_override: Option<i32>,
@@ -1829,7 +1831,7 @@ impl ReplayRenderer {
         let top = if let Some(center_y) = center_y_override {
             center_y - height as i32 / 2
         } else if let Some(score_y) = skin.config.score_y {
-            (score_y as f32 * scale_y).round() as i32 - height as i32 / 2
+            hud_anchor_y + (score_y as f32 * scale_y).round() as i32 - height as i32 / 2
         } else {
             (hit_y as f32 - height as f32 * 0.6).round() as i32
         };

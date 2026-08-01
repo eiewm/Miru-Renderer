@@ -329,3 +329,49 @@ pub(crate) struct ResultsScreenData {
     pub(crate) graph_points: Vec<ResultsGraphPoint>,
     pub(crate) timing_summary: ResultsTimingSummary,
 }
+
+/// A plausible score for the HUD editor preview, used when no replay backs it.
+pub(crate) fn sample_results_screen_data() -> ResultsScreenData {
+    let statistics = ReplayBasicStatistics {
+        max: 1_180,
+        hit300: 402,
+        hit200: 61,
+        hit100: 18,
+        hit50: 3,
+        miss: 6,
+    };
+    ResultsScreenData {
+        player_name: "Player".to_string(),
+        artist: "Artist".to_string(),
+        title: "Song Title".to_string(),
+        difficulty: "Insane".to_string(),
+        creator: "Mapper".to_string(),
+        mod_badges: Vec::new(),
+        mod_origin: ReplayOrigin::StableLegacy,
+        replay_timestamp: None,
+        score: 943_512,
+        accuracy: 98.41,
+        max_combo: 1_204,
+        final_combo: 486,
+        statistics,
+        grade: ResultsGrade::S,
+        perfect_combo: false,
+        // A curve that dips and recovers, so the graph is not a flat line.
+        graph_points: (0..GRAPH_SAMPLE_COUNT)
+            .map(|index| {
+                let progress = index as f32 / (GRAPH_SAMPLE_COUNT - 1) as f32;
+                ResultsGraphPoint {
+                    progress,
+                    life: (0.55 + 0.45 * (progress * 6.0).sin() * (1.0 - progress * 0.4))
+                        .clamp(0.05, 1.0),
+                }
+            })
+            .collect(),
+        timing_summary: ResultsTimingSummary {
+            sample_count: 484,
+            avg_early_ms: -7.4,
+            avg_late_ms: 8.1,
+            unstable_rate: 92.6,
+        },
+    }
+}

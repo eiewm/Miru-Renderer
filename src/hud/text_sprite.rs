@@ -55,11 +55,9 @@ fn get_asset_candidates(
                 candidates.push("score-percent.png".to_string());
             }
         }
-        'x' => {
-            if prefix == TextPrefix::Combo {
-                candidates.push(format!("{}-x.png", combo_prefix));
-                candidates.push("combo-x.png".to_string());
-            }
+        'x' if prefix == TextPrefix::Combo => {
+            candidates.push(format!("{}-x.png", combo_prefix));
+            candidates.push("combo-x.png".to_string());
         }
         _ => {}
     }
